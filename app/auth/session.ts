@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { query } from '../db/pool';
+import { and, eq, gt, sql } from 'drizzle-orm';
+import { db } from '../db/pool';
+import { sessions, users } from '../db/schema';
 
 const DEFAULT_DAYS = 30;
 
@@ -24,13 +26,16 @@ interface CreateSessionOpts {
 
 export async function createSession(userId: number, { userAgent = null, ip = null, days = DEFAULT_DAYS }: CreateSessionOpts = {}) {
   const id = randomBytes(32).toString('base64url');
-  const r = await query(
-    `INSERT INTO sessions (id, user_id, expires_at, user_agent, ip)
-     VALUES ($1, $2, now() + ($3 || ' days')::interval, $4, $5)
-     RETURNING expires_at`,
-    [id, userId, String(days), userAgent, ip]
-  );
-  return { id, expiresAt: (r.rows[0] as any).expires_at };
+  // now() + ($n || ' days')::interval:与原裸 SQL 逐字相同,只是经 drizzle 的
+  // sql 模板绑定参数(模板里的 ${} 一律变 $n 占位符,不拼串)。
+  const r = await db.insert(sessions).values({
+    id,
+    user_id: userId,
+    expires_at: sql`now() + (${String(days)} || ' days')::interval`,
+    user_agent: userAgent,
+    ip,
+  }).returning({ expires_at: sessions.expires_at });
+  return { id, expiresAt: r[0].expires_at };
 }
 
 export async function getSession(id: string | null | undefined): Promise<Session | null> {
@@ -40,14 +45,17 @@ export async function getSession(id: string | null | undefined): Promise<Session
   // 组合 —— 第二条语句一旦失败,用户的会话行还在、没过期,后面这条查询原本会
   // 照样把人放进来,状态位形同虚设。把 status 判断挪进 WHERE,即使清理 sessions
   // 那步没跑,下一次请求也会因为这一条件直接查不到人。
-  const r = await query(
-    `SELECT s.id, u.id AS user_id, u.username, u.display_name, u.role, u.status
-       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.id = $1 AND s.expires_at > now() AND u.status = 'approved'`,
-    [id]
-  );
-  if (!r.rowCount) return null;
-  const x = r.rows[0] as any;
+  const r = await db.select({
+    id: sessions.id,
+    user_id: users.id,
+    username: users.username,
+    display_name: users.display_name,
+    role: users.role,
+    status: users.status,
+  }).from(sessions).innerJoin(users, eq(users.id, sessions.user_id))
+    .where(and(eq(sessions.id, id), gt(sessions.expires_at, sql`now()`), eq(users.status, 'approved')));
+  if (!r.length) return null;
+  const x = r[0];
   return {
     id: x.id,
     // bigint/int8 → Number 现在统一在 db/pool.ts 用 pg 的类型解析器在源头修好
@@ -62,8 +70,8 @@ export async function getSession(id: string | null | undefined): Promise<Session
 }
 
 export const destroySession = (id: string): Promise<void> =>
-  query('DELETE FROM sessions WHERE id=$1', [id]).then(() => undefined);
+  db.delete(sessions).where(eq(sessions.id, id)).then(() => undefined);
 export const destroyUserSessions = (userId: number): Promise<void> =>
-  query('DELETE FROM sessions WHERE user_id=$1', [userId]).then(() => undefined);
+  db.delete(sessions).where(eq(sessions.user_id, userId)).then(() => undefined);
 export const cleanupExpired = (): Promise<number | null> =>
-  query('DELETE FROM sessions WHERE expires_at <= now()').then(r => r.rowCount);
+  db.execute(sql`DELETE FROM sessions WHERE expires_at <= now()`).then(r => r.rowCount);

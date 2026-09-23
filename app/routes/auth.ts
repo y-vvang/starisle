@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { query, tx } from '../db/pool';
+import { eq, or, sql } from 'drizzle-orm';
+import { db, tx, pgCode } from '../db/pool';
+import { sessions, users } from '../db/schema';
 import { hash, verify, N as SCRYPT_N, R as SCRYPT_R, P as SCRYPT_P } from '../auth/password';
 import { createSession, destroySession } from '../auth/session';
 import { getSetting } from './settings';
@@ -8,9 +10,12 @@ import { str } from '../lib/str';
 import type { RouteHandler } from './types';
 
 const DAYS = 30;
-const publicUser = (u: any) => ({ id: u.id, username: u.username, display_name: u.display_name,
-                                 email: u.email, repo_url: u.repo_url, bio: u.bio,
-                                 role: u.role, status: u.status, created_at: u.created_at });
+const publicUser = (u: { id: number; username: string; display_name: string;
+                         email: string; repo_url: string | null; bio: string | null;
+                         role: string; status: string; created_at: Date }) =>
+  ({ id: u.id, username: u.username, display_name: u.display_name,
+     email: u.email, repo_url: u.repo_url, bio: u.bio,
+     role: u.role, status: u.status, created_at: u.created_at });
 
 // 用户不存在时,登录仍要跑一次和真实校验同代价的 scrypt,靠响应时间抹平
 // "账号存在与否"的差异。代价参数(N/R/P)直接从 password.ts 引入单一事实源,
@@ -49,22 +54,22 @@ const authRoutes: RouteHandler = async (ctx, D) => {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return D({ error: '邮箱格式不对' }, 400);
     if (apply_note.length < 10) return D({ error: '请写至少 10 字的申请说明' }, 400);
 
-    const dup = await query('SELECT 1 FROM users WHERE username=$1 OR email=$2', [username, email]);
-    if (dup.rowCount) return D({ error: '该用户名或邮箱已被使用' }, 409);
+    const dup = await db.select({ one: sql`1` }).from(users)
+      .where(or(eq(users.username, username), eq(users.email, email)));
+    if (dup.length) return D({ error: '该用户名或邮箱已被使用' }, 409);
 
-    await query(
-      `INSERT INTO users (username,password_hash,display_name,email,repo_url,apply_note,role,status)
-       VALUES ($1,$2,$3,$4,$5,$6,'member','pending')`,
-      [username, await hash(password), display_name, email, repo_url || null, apply_note]
-    );
+    await db.insert(users).values({
+      username, password_hash: await hash(password), display_name, email,
+      repo_url: repo_url || null, apply_note, role: 'member', status: 'pending',
+    });
     return D({ ok: true, note: '已提交,站长审核通过后即可登录。' });
   }
 
   if (method === 'POST' && path === '/api/auth/login') {
     const username = str(body.username, 32).toLowerCase();
     const password = String(body.password || '');
-    const r = await query('SELECT * FROM users WHERE username=$1', [username]);
-    const u = r.rows[0] as any;
+    const r = await db.select().from(users).where(eq(users.username, username));
+    const u = r[0];
     // 用户不存在时也跑一次哈希,避免用响应时间区分账号是否存在
     const ok = u ? await verify(password, u.password_hash)
                  : await verify(password, DUMMY_HASH);
@@ -86,40 +91,42 @@ const authRoutes: RouteHandler = async (ctx, D) => {
 
   if (method === 'GET' && path === '/api/auth/me') {
     if (!ctx.user) return D({ user: null });
-    const r = await query('SELECT * FROM users WHERE id=$1', [ctx.user.id]);
-    return D({ user: r.rowCount ? publicUser(r.rows[0]) : null });
+    const r = await db.select().from(users).where(eq(users.id, ctx.user.id));
+    return D({ user: r.length ? publicUser(r[0]) : null });
   }
 
   if (method === 'PATCH' && path === '/api/me') {
     if (!ctx.user) return D({ error: '请先登录' }, 401);
-    const sets: string[] = [], vals: unknown[] = [];
+    // PATCH 动态列集合是裸 SQL 的强项:drizzle builder 逐列 .set() 也行,
+    // 但列集合在运行时才知道,拼一个 Record<string, unknown> 传给 .set()
+    // 等价且直接。值已全部过校验,不存在注入面。
+    const sets: Record<string, unknown> = {};
     for (const f of ['display_name', 'bio', 'repo_url']) {
-      if (typeof body[f] === 'string') { sets.push(`${f}=$${sets.length + 1}`); vals.push(str(body[f], 500)); }
+      if (typeof body[f] === 'string') sets[f] = str(body[f], 500);
     }
     if (body.new_password) {
-      const cur = await query('SELECT password_hash FROM users WHERE id=$1', [ctx.user.id]);
-      if (!await verify(String(body.current_password || ''), (cur.rows[0] as any).password_hash)) {
+      const cur = await db.select({ password_hash: users.password_hash })
+        .from(users).where(eq(users.id, ctx.user.id));
+      if (!await verify(String(body.current_password || ''), cur[0].password_hash)) {
         return D({ error: '当前密码不对' }, 403);
       }
       if (String(body.new_password).length < 8) return D({ error: '新密码至少 8 位' }, 400);
-      sets.push(`password_hash=$${sets.length + 1}`);
-      vals.push(await hash(String(body.new_password)));
+      sets.password_hash = await hash(String(body.new_password));
     }
-    if (!sets.length) return D({ error: '没有要改的内容' }, 400);
-    vals.push(ctx.user.id);
-    const updateSql = `UPDATE users SET ${sets.join(',')}, updated_at=now() WHERE id=$${vals.length}`;
+    if (!Object.keys(sets).length) return D({ error: '没有要改的内容' }, 400);
+    sets.updated_at = sql`now()`;
     if (body.new_password) {
       // 改密码 + 踢会话必须原子:旧实现是两条独立语句,第二条(删 sessions)一旦
       // 抛异常,密码已经改了但攻击者原来那个会话安然无恙——而这恰恰是"怀疑账号
       // 被盗、赶紧改密码"这个场景下唯一要保证生效的部分。用 tx() 包住,失败就
       // 整体回滚,不会留下"密码改了但没踢人"的中间态。
       await tx(async (c) => {
-        await c.query(updateSql, vals as any[]);
-        await c.query('DELETE FROM sessions WHERE user_id=$1', [ctx.user!.id]);
+        await c.update(users).set(sets).where(eq(users.id, ctx.user!.id));
+        await c.delete(sessions).where(eq(sessions.user_id, ctx.user!.id));
       });
       return { status: 200, data: { ok: true, note: '密码已改,请重新登录' }, clearSession: true };
     }
-    await query(updateSql, vals);
+    await db.update(users).set(sets).where(eq(users.id, ctx.user.id));
     return D({ ok: true });
   }
 };

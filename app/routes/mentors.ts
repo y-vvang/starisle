@@ -1,4 +1,6 @@
-import { query, tx } from '../db/pool';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { db, tx, pgCode } from '../db/pool';
+import { mentorCourses, mentorRequests, mentors, partnerOrgs, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
 import { notify } from './notifications';
 import { str } from '../lib/str';
@@ -11,18 +13,25 @@ const CATEGORIES = new Set(['中学', '大学', '企业']);
 // ★ 公开序列化。contact_email 不在这里,也不该在任何面向非站长的响应里出现。
 // 写成一个函数而不是每个端点各剥各的 —— 上游正是因为逐端点手剥,在
 // /api/mentors 与 /api/mentors/:id 剥掉了,却在申请列表端点又漏了回来。
-const publicMentor = (m: any, courses?: { title: string; total_hours: number | null; level: string | null }[]) => ({
+const publicMentor = (m: { id: number; slug: string; name: string;
+                           title: string | null; org: string | null; bio: string | null },
+                      courses?: { title: string; total_hours: number | null; level: string | null }[]) => ({
   id: m.id, slug: m.slug, name: m.name, title: m.title, org: m.org, bio: m.bio,
   courses: courses || [],
 });
-const courseRow = (c: any) => ({ title: c.title, total_hours: c.total_hours, level: c.level });
+const courseRow = (c: { title: string; total_hours: number | null; level: string | null }) =>
+  ({ title: c.title, total_hours: c.total_hours, level: c.level });
 
 async function coursesOf(ids: number[]) {
   if (!ids.length) return new Map<string, { title: string; total_hours: number | null; level: string | null }[]>();
-  const r = await query(
-    'SELECT * FROM mentor_courses WHERE mentor_id = ANY($1) ORDER BY mentor_id, sort, id', [ids]);
+  const r = await db.select({
+    mentor_id: mentorCourses.mentor_id, title: mentorCourses.title,
+    total_hours: mentorCourses.total_hours, level: mentorCourses.level,
+  }).from(mentorCourses)
+    .where(sql`${mentorCourses.mentor_id} = ANY(${sql.raw(`ARRAY[${ids.map(Number).join(',')}]::bigint[]`)})`)
+    .orderBy(mentorCourses.mentor_id, mentorCourses.sort, mentorCourses.id);
   const map = new Map<string, { title: string; total_hours: number | null; level: string | null }[]>();
-  for (const c of r.rows as any[]) {
+  for (const c of r) {
     if (!map.has(String(c.mentor_id))) map.set(String(c.mentor_id), []);
     map.get(String(c.mentor_id))!.push(courseRow(c));
   }
@@ -61,20 +70,21 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   // GET /api/mentors?course=
   if (method === 'GET' && seg[1] === 'mentors' && !seg[2]) {
     const course = qs.get('course');
-    const r = await query(
-      `SELECT m.* FROM mentors m
-        WHERE m.status='active'
-          AND ($1::text IS NULL OR EXISTS (
-                SELECT 1 FROM mentor_courses c WHERE c.mentor_id=m.id AND c.title=$1))
-        ORDER BY m.sort, m.id`, [course || null]);
-    const map = await coursesOf((r.rows as any[]).map(m => m.id));
-    return D({ mentors: (r.rows as any[]).map(m => publicMentor(m, map.get(String(m.id)))) });
+    const r = await db.select().from(mentors)
+      .where(and(
+        eq(mentors.status, 'active'),
+        // EXISTS 子查询保持原样(比 builder 的半连接嵌套更直白)
+        course ? sql`EXISTS (SELECT 1 FROM mentor_courses c WHERE c.mentor_id = ${mentors.id} AND c.title = ${course})` : undefined,
+      ))
+      .orderBy(mentors.sort, mentors.id);
+    const map = await coursesOf(r.map(m => m.id));
+    return D({ mentors: r.map(m => publicMentor(m, map.get(String(m.id)))) });
   }
 
   // GET /api/mentors/:slug
   if (method === 'GET' && seg[1] === 'mentors' && seg[2] && !seg[3]) {
-    const r = await query('SELECT * FROM mentors WHERE slug=$1', [seg[2]]);
-    const m = r.rows[0] as any;
+    const r = await db.select().from(mentors).where(eq(mentors.slug, seg[2]));
+    const m = r[0];
     // 隐藏的导师只有站长看得到,其余人一律 404(与项目/课程同一条掩护规则)
     if (!m || (m.status !== 'active' && !(user && user.role === 'admin'))) {
       return D({ error: 'not found' }, 404);
@@ -82,10 +92,12 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     const map = await coursesOf([m.id]);
     let myRequest = null;
     if (user) {
-      const q = await query(
-        `SELECT id,status,created_at FROM mentor_requests
-          WHERE mentor_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 1`, [m.id, user.id]);
-      myRequest = q.rows[0] || null;
+      const q = await db.select({
+        id: mentorRequests.id, status: mentorRequests.status, created_at: mentorRequests.created_at,
+      }).from(mentorRequests)
+        .where(and(eq(mentorRequests.mentor_id, m.id), eq(mentorRequests.user_id, user.id)))
+        .orderBy(desc(mentorRequests.created_at)).limit(1);
+      myRequest = q[0] || null;
     }
     return D({ mentor: publicMentor(m, map.get(String(m.id))), my_request: myRequest });
   }
@@ -93,8 +105,9 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   // POST /api/mentors/:slug/requests
   if (method === 'POST' && seg[1] === 'mentors' && seg[2] && seg[3] === 'requests' && !seg[4]) {
     if (!user) return D({ error: '请先登录' }, 401);
-    const r = await query(`SELECT id FROM mentors WHERE slug=$1 AND status='active'`, [seg[2]]);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
+    const r = await db.select({ id: mentors.id }).from(mentors)
+      .where(and(eq(mentors.slug, seg[2]), eq(mentors.status, 'active')));
+    if (!r.length) return D({ error: 'not found' }, 404);
 
     // 只取这四个字段。请求体里的 real_name / contact / school / grade / user_id 等
     // 一律不看 —— 申请人是谁由会话决定,其余的本项目不收。
@@ -105,14 +118,18 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     if (weekly && !HOURS.has(weekly)) return D({ error: '每周可投入时间不合法' }, 400);
 
     try {
-      const ins = await query(
-        `INSERT INTO mentor_requests (mentor_id,user_id,interest,background,questions,weekly_hours)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,status,created_at`,
-        [(r.rows[0] as any).id, user.id, interest,
-         str(body.background, 1000) || null, str(body.questions, 1000) || null, weekly]);
-      return D({ request: ins.rows[0] });
+      const ins = await db.insert(mentorRequests).values({
+        mentor_id: r[0].id, user_id: user.id, interest,
+        background: str(body.background, 1000) || null,
+        questions: str(body.questions, 1000) || null,
+        weekly_hours: weekly,
+      }).returning({
+        id: mentorRequests.id, status: mentorRequests.status, created_at: mentorRequests.created_at,
+      });
+      return D({ request: ins[0] });
     } catch (e) {
-      if ((e as any) && (e as any).code === '23505') return D({ error: '你已经向这位导师提交过申请了' }, 409);
+      // pgCode 兼容 drizzle 包装(.cause.code)与裸 pg(.code)
+      if (pgCode(e) === '23505') return D({ error: '你已经向这位导师提交过申请了' }, 409);
       throw e;
     }
   }
@@ -120,14 +137,19 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   // GET /api/my/mentor-requests
   if (method === 'GET' && seg[1] === 'my' && seg[2] === 'mentor-requests' && !seg[3]) {
     if (!user) return D({ error: '请先登录' }, 401);
-    // 逐列点名:这里绝不能 SELECT m.* —— 那会把 contact_email 带给申请人。
-    const r = await query(
-      `SELECT q.id, q.status, q.interest, q.background, q.questions, q.weekly_hours,
-              q.review_note, q.created_at,
-              m.slug AS mentor_slug, m.name AS mentor_name, m.title AS mentor_title
-         FROM mentor_requests q JOIN mentors m ON m.id=q.mentor_id
-        WHERE q.user_id=$1 ORDER BY q.created_at DESC`, [user.id]);
-    return D({ requests: (r.rows as any[]).map(x => ({
+    // 逐列点名:这里绝不能把 mentors 整表列进 select —— 那会把 contact_email
+    // 带给申请人。
+    const r = await db.select({
+      id: mentorRequests.id, status: mentorRequests.status,
+      interest: mentorRequests.interest, background: mentorRequests.background,
+      questions: mentorRequests.questions, weekly_hours: mentorRequests.weekly_hours,
+      review_note: mentorRequests.review_note, created_at: mentorRequests.created_at,
+      mentor_slug: mentors.slug, mentor_name: mentors.name, mentor_title: mentors.title,
+    }).from(mentorRequests)
+      .innerJoin(mentors, eq(mentors.id, mentorRequests.mentor_id))
+      .where(eq(mentorRequests.user_id, user.id))
+      .orderBy(desc(mentorRequests.created_at));
+    return D({ requests: r.map(x => ({
       id: x.id, status: x.status, interest: x.interest, background: x.background,
       questions: x.questions, weekly_hours: x.weekly_hours, review_note: x.review_note,
       created_at: x.created_at,
@@ -142,12 +164,12 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   if (method === 'POST' && seg[1] === 'mentor-requests' && seg[2]
       && seg[3] === 'withdraw' && !seg[4]) {
     if (!user) return D({ error: '请先登录' }, 401);
-    const r = await query('SELECT * FROM mentor_requests WHERE id=$1', [seg[2]]);
-    const q = r.rows[0] as any;
+    const r = await db.select().from(mentorRequests).where(eq(mentorRequests.id, Number(seg[2])));
+    const q = r[0];
     // 不是自己的一律 404 而不是 403 —— 403 会告诉对方"这条申请存在"。
     if (!q || Number(q.user_id) !== Number(user.id)) return D({ error: 'not found' }, 404);
     if (q.status !== 'pending') return D({ error: '已经处理过的申请不能撤回' }, 409);
-    await query('DELETE FROM mentor_requests WHERE id=$1', [seg[2]]);
+    await db.delete(mentorRequests).where(eq(mentorRequests.id, Number(seg[2])));
     return D({ ok: true });
   }
 
@@ -155,10 +177,10 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   if (method === 'GET' && seg[1] === 'partners' && !seg[2]) {
     const cat = qs.get('category');
     if (cat && !CATEGORIES.has(cat)) return D({ error: '未知的机构分类' }, 400);
-    const r = await query(
-      `SELECT * FROM partner_orgs WHERE ($1::text IS NULL OR category=$1)
-        ORDER BY sort, id`, [cat || null]);
-    return D({ partners: (r.rows as any[]).map(p => ({
+    const r = await db.select().from(partnerOrgs)
+      .where(cat ? eq(partnerOrgs.category, cat) : undefined)
+      .orderBy(partnerOrgs.sort, partnerOrgs.id);
+    return D({ partners: r.map(p => ({
       id: p.id, slug: p.slug, name: p.name, category: p.category,
       logo_path: p.logo_path, website: p.website, cooperation: p.cooperation,
       monogram: p.monogram,
@@ -177,18 +199,18 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     if ('error' in cs) return D({ error: cs.error }, 400);
     const slug = await uniqueSlug(name, 'mentors');
     const m = await tx(async (c) => {
-      const r = await c.query(
-        `INSERT INTO mentors (slug,name,title,org,bio,contact_email,sort)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [slug, name, str(body.title, 60) || null, str(body.org, 120) || null,
-         str(body.bio, 2000) || null, str(body.contact_email, 200) || null,
-         Number.isInteger(body.sort) ? body.sort : 0]);
+      const r = await c.insert(mentors).values({
+        slug, name,
+        title: str(body.title, 60) || null, org: str(body.org, 120) || null,
+        bio: str(body.bio, 2000) || null, contact_email: str(body.contact_email, 200) || null,
+        sort: Number.isInteger(body.sort) ? body.sort as number : 0,
+      }).returning();
       for (const [i, x] of (cs.value || []).entries()) {
-        await c.query(
-          `INSERT INTO mentor_courses (mentor_id,title,total_hours,level,sort)
-           VALUES ($1,$2,$3,$4,$5)`, [(r.rows[0] as any).id, x.title, x.total_hours, x.level, i]);
+        await c.insert(mentorCourses).values({
+          mentor_id: r[0].id, title: x.title, total_hours: x.total_hours, level: x.level, sort: i,
+        });
       }
-      return r.rows[0] as any;
+      return r[0];
     });
     const map = await coursesOf([m.id]);
     return D({ mentor: publicMentor(m, map.get(String(m.id))) });
@@ -196,39 +218,38 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
 
   // PATCH /api/admin/mentors/:id
   if (method === 'PATCH' && seg[2] === 'mentors' && seg[3] && !seg[4]) {
-    const sets: string[] = [], vals: unknown[] = [];
+    const sets: Record<string, unknown> = {};
     for (const [k, max] of [['name', 60], ['title', 60], ['org', 120],
                             ['bio', 2000], ['contact_email', 200]] as const) {
-      if (typeof body[k] === 'string') { sets.push(`${k}=$${sets.length + 1}`); vals.push(str(body[k], max) || null); }
+      if (typeof body[k] === 'string') sets[k] = str(body[k], max) || null;
     }
     if (body.status !== undefined) {
       const s = str(body.status, 20);
       if (s !== 'active' && s !== 'hidden') return D({ error: '未知的导师状态' }, 400);
-      sets.push(`status=$${sets.length + 1}`); vals.push(s);
+      sets.status = s;
     }
-    if (Number.isInteger(body.sort)) { sets.push(`sort=$${sets.length + 1}`); vals.push(body.sort); }
+    if (Number.isInteger(body.sort)) sets.sort = body.sort;
     const cs = parseCourses(body.courses);
     if ('error' in cs) return D({ error: cs.error }, 400);
-    if (!sets.length && cs.value === undefined) return D({ error: '没有要改的内容' }, 400);
+    if (!Object.keys(sets).length && cs.value === undefined) return D({ error: '没有要改的内容' }, 400);
 
     const done = await tx(async (c) => {
-      if (sets.length) {
-        vals.push(seg[3]);
-        const r = await c.query(
-          `UPDATE mentors SET ${sets.join(',')}, updated_at=now()
-            WHERE id=$${vals.length} RETURNING id`, vals as any[]);
-        if (!r.rowCount) return false;
+      if (Object.keys(sets).length) {
+        sets.updated_at = sql`now()`;
+        const r = await c.update(mentors).set(sets)
+          .where(eq(mentors.id, Number(seg[3]))).returning({ id: mentors.id });
+        if (!r.length) return false;
       } else {
-        const r = await c.query('SELECT 1 FROM mentors WHERE id=$1', [seg[3]]);
-        if (!r.rowCount) return false;
+        const r = await c.select({ one: sql`1` }).from(mentors).where(eq(mentors.id, Number(seg[3])));
+        if (!r.length) return false;
       }
       if (cs.value !== undefined) {
         // 整表替换:后台是整份表单提交的,增量合并反而会留下没人删得掉的旧条目。
-        await c.query('DELETE FROM mentor_courses WHERE mentor_id=$1', [seg[3]]);
+        await c.delete(mentorCourses).where(eq(mentorCourses.mentor_id, Number(seg[3])));
         for (const [i, x] of cs.value.entries()) {
-          await c.query(
-            `INSERT INTO mentor_courses (mentor_id,title,total_hours,level,sort)
-             VALUES ($1,$2,$3,$4,$5)`, [seg[3], x.title, x.total_hours, x.level, i]);
+          await c.insert(mentorCourses).values({
+            mentor_id: Number(seg[3]), title: x.title, total_hours: x.total_hours, level: x.level, sort: i,
+          });
         }
       }
       return true;
@@ -244,15 +265,19 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     }
     // 只有这一处会 SELECT 导师的 contact_email —— 站长要靠它在站外联系导师。
     // 申请人侧只给 username/display_name,不 join 邮箱:站长审这个不需要申请人邮箱。
-    const r = await query(
-      `SELECT q.*, m.name AS mentor_name, m.contact_email AS mentor_email,
-              u.username, u.display_name
-         FROM mentor_requests q
-         JOIN mentors m ON m.id=q.mentor_id
-         JOIN users u ON u.id=q.user_id
-        WHERE ($1::text IS NULL OR q.status=$1)
-        ORDER BY q.created_at DESC`, [status || null]);
-    return D({ requests: (r.rows as any[]).map(x => ({
+    const r = await db.select({
+      id: mentorRequests.id, status: mentorRequests.status,
+      interest: mentorRequests.interest, background: mentorRequests.background,
+      questions: mentorRequests.questions, weekly_hours: mentorRequests.weekly_hours,
+      review_note: mentorRequests.review_note, created_at: mentorRequests.created_at,
+      mentor_name: mentors.name, mentor_email: mentors.contact_email,
+      username: users.username, display_name: users.display_name,
+    }).from(mentorRequests)
+      .innerJoin(mentors, eq(mentors.id, mentorRequests.mentor_id))
+      .innerJoin(users, eq(users.id, mentorRequests.user_id))
+      .where(status ? eq(mentorRequests.status, status) : undefined)
+      .orderBy(desc(mentorRequests.created_at));
+    return D({ requests: r.map(x => ({
       id: x.id, status: x.status, interest: x.interest, background: x.background,
       questions: x.questions, weekly_hours: x.weekly_hours, review_note: x.review_note,
       created_at: x.created_at,
@@ -268,19 +293,23 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     if (decision !== 'approve' && decision !== 'reject') {
       return D({ error: 'decision 只能是 approve 或 reject' }, 400);
     }
-    const cur = await query(
-      `SELECT q.id,q.status,q.user_id,m.name FROM mentor_requests q
-         JOIN mentors m ON m.id=q.mentor_id WHERE q.id=$1`, [seg[3]]);
-    if (!cur.rowCount) return D({ error: 'not found' }, 404);
-    if ((cur.rows[0] as any).status !== 'pending') return D({ error: '这条申请已经处理过了' }, 409);
+    const cur = await db.select({
+      id: mentorRequests.id, status: mentorRequests.status,
+      user_id: mentorRequests.user_id, name: mentors.name,
+    }).from(mentorRequests)
+      .innerJoin(mentors, eq(mentors.id, mentorRequests.mentor_id))
+      .where(eq(mentorRequests.id, Number(seg[3])));
+    if (!cur.length) return D({ error: 'not found' }, 404);
+    if (cur[0].status !== 'pending') return D({ error: '这条申请已经处理过了' }, 409);
     const next = decision === 'approve' ? 'approved' : 'rejected';
-    await query(
-      `UPDATE mentor_requests SET status=$1, review_note=$2, decided_by=$3, decided_at=now()
-        WHERE id=$4`, [next, str(body.note, 500) || null, user!.id, seg[3]]);
-    await notify((cur.rows[0] as any).user_id, 'mentor',
+    await db.update(mentorRequests).set({
+      status: next, review_note: str(body.note, 500) || null,
+      decided_by: user!.id, decided_at: sql`now()`,
+    }).where(eq(mentorRequests.id, Number(seg[3])));
+    await notify(cur[0].user_id, 'mentor',
       next === 'approved' ? '导师指导申请已通过' : '导师指导申请未通过',
       next === 'approved'
-        ? `站长会尽快帮你和「${(cur.rows[0] as any).name}」对接。`
+        ? `站长会尽快帮你和「${cur[0].name}」对接。`
         : `这次没有通过,可以过段时间再申请。`);
     return D({ ok: true, status: next });
   }
@@ -288,18 +317,21 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
   // POST /api/admin/mentor-requests/:id/complete
   if (method === 'POST' && seg[2] === 'mentor-requests' && seg[3]
       && seg[4] === 'complete' && !seg[5]) {
-    const cur = await query(
-      `SELECT q.id,q.status,q.user_id,m.name FROM mentor_requests q
-         JOIN mentors m ON m.id=q.mentor_id WHERE q.id=$1`, [seg[3]]);
-    if (!cur.rowCount) return D({ error: 'not found' }, 404);
-    if ((cur.rows[0] as any).status !== 'approved') {
+    const cur = await db.select({
+      id: mentorRequests.id, status: mentorRequests.status,
+      user_id: mentorRequests.user_id, name: mentors.name,
+    }).from(mentorRequests)
+      .innerJoin(mentors, eq(mentors.id, mentorRequests.mentor_id))
+      .where(eq(mentorRequests.id, Number(seg[3])));
+    if (!cur.length) return D({ error: 'not found' }, 404);
+    if (cur[0].status !== 'approved') {
       return D({ error: '只有已通过的申请才能标记为已对接' }, 409);
     }
-    await query(
-      `UPDATE mentor_requests SET status='completed', decided_by=$1, decided_at=now()
-        WHERE id=$2`, [user!.id, seg[3]]);
-    await notify((cur.rows[0] as any).user_id, 'mentor', '导师已联系',
-      `站长已经把你和「${(cur.rows[0] as any).name}」对接上了,接下来直接沟通就好。`);
+    await db.update(mentorRequests).set({
+      status: 'completed', decided_by: user!.id, decided_at: sql`now()`,
+    }).where(eq(mentorRequests.id, Number(seg[3])));
+    await notify(cur[0].user_id, 'mentor', '导师已联系',
+      `站长已经把你和「${cur[0].name}」对接上了,接下来直接沟通就好。`);
     return D({ ok: true, status: 'completed' });
   }
 
@@ -310,35 +342,34 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     const category = str(body.category, 10);
     if (!CATEGORIES.has(category)) return D({ error: '机构分类只能是中学/大学/企业' }, 400);
     const slug = await uniqueSlug(name, 'partner_orgs');
-    const r = await query(
-      `INSERT INTO partner_orgs (slug,name,category,logo_path,website,cooperation,monogram,sort)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [slug, name, category, str(body.logo_path, 300) || null, str(body.website, 300) || null,
-       str(body.cooperation, 2000) || null, str(body.monogram, 10) || null,
-       Number.isInteger(body.sort) ? body.sort : 0]);
-    return D({ partner: r.rows[0] });
+    const r = await db.insert(partnerOrgs).values({
+      slug, name, category,
+      logo_path: str(body.logo_path, 300) || null, website: str(body.website, 300) || null,
+      cooperation: str(body.cooperation, 2000) || null, monogram: str(body.monogram, 10) || null,
+      sort: Number.isInteger(body.sort) ? body.sort as number : 0,
+    }).returning();
+    return D({ partner: r[0] });
   }
 
   // PATCH /api/admin/partners/:id
   if (method === 'PATCH' && seg[2] === 'partners' && seg[3] && !seg[4]) {
-    const sets: string[] = [], vals: unknown[] = [];
+    const sets: Record<string, unknown> = {};
     for (const [k, max] of [['name', 120], ['logo_path', 300], ['website', 300],
                             ['cooperation', 2000], ['monogram', 10]] as const) {
-      if (typeof body[k] === 'string') { sets.push(`${k}=$${sets.length + 1}`); vals.push(str(body[k], max) || null); }
+      if (typeof body[k] === 'string') sets[k] = str(body[k], max) || null;
     }
     if (body.category !== undefined) {
       const c = str(body.category, 10);
       if (!CATEGORIES.has(c)) return D({ error: '机构分类只能是中学/大学/企业' }, 400);
-      sets.push(`category=$${sets.length + 1}`); vals.push(c);
+      sets.category = c;
     }
-    if (Number.isInteger(body.sort)) { sets.push(`sort=$${sets.length + 1}`); vals.push(body.sort); }
-    if (!sets.length) return D({ error: '没有要改的内容' }, 400);
-    vals.push(seg[3]);
-    const r = await query(
-      `UPDATE partner_orgs SET ${sets.join(',')}, updated_at=now()
-        WHERE id=$${vals.length} RETURNING *`, vals);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
-    return D({ partner: r.rows[0] });
+    if (Number.isInteger(body.sort)) sets.sort = body.sort;
+    if (!Object.keys(sets).length) return D({ error: '没有要改的内容' }, 400);
+    sets.updated_at = sql`now()`;
+    const r = await db.update(partnerOrgs).set(sets)
+      .where(eq(partnerOrgs.id, Number(seg[3]))).returning();
+    if (!r.length) return D({ error: 'not found' }, 404);
+    return D({ partner: r[0] });
   }
 };
 

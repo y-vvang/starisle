@@ -1,4 +1,6 @@
-import { query, tx } from '../db/pool';
+import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { db, tx, pgCode } from '../db/pool';
+import { courses, courseEnrollments, courseLessons, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
 import { notify } from './notifications';
 import { str } from '../lib/str';
@@ -7,14 +9,18 @@ import type { RouteHandler } from './types';
 const TRACKS = new Set(['math', 'literacy', 'extension', 'application']);
 const STATUSES = new Set(['draft', 'pending', 'published', 'archived']);
 
-// numeric 列经 pg 驱动返回的是**字符串**(为了不丢精度),而 total_hours 是给前端做
-// 三宫格数字用的。bigint 已经在 pool.ts 里统一成 Number 了,numeric 没有——
-// 它可能有小数,全局转换会影响将来任何 numeric 列,所以只在这里按字段转。
+// numeric 列(total_hours)在 drizzle 与裸 pg 一样默认返回**字符串**(为了不丢
+// 精度),而 total_hours 是给前端做三宫格数字用的。bigint 已经在 pool.ts 里
+// 统一成 Number 了,numeric 没有 —— 它可能有小数,全局转换会影响将来任何
+// numeric 列,所以只在这里按字段转。
 const hours = (v: unknown) => (v == null ? null : Number(v));
 
 // 公开卡片:列表与详情共用的字段。故意不含 created_by / review_note / reviewed_by ——
 // 审核留痕是后台的事,不进任何面向普通访客的响应。
-const card = (c: any) => ({
+const card = (c: { id: number; slug: string; title: string; subject: string | null;
+                   track: string; summary: string | null; instructors: string | null;
+                   total_hours: string | null; featured: boolean; status: string;
+                   lesson_count?: number | null; created_at: Date }) => ({
   id: c.id, slug: c.slug, title: c.title, subject: c.subject, track: c.track,
   summary: c.summary, instructors: c.instructors, total_hours: hours(c.total_hours),
   featured: c.featured, status: c.status,
@@ -22,14 +28,15 @@ const card = (c: any) => ({
   created_at: c.created_at,
 });
 
-const lessonRow = (l: any) => ({
+const lessonRow = (l: { id: number; position: number; title: string;
+                        summary: string | null; duration_minutes: number }) => ({
   id: l.id, position: l.position, title: l.title,
   summary: l.summary, duration_minutes: l.duration_minutes,
 });
 
 async function loadCourse(slug: string) {
-  const r = await query('SELECT * FROM courses WHERE slug=$1', [slug]);
-  return (r.rows[0] as any) || null;
+  const r = await db.select().from(courses).where(eq(courses.slug, slug));
+  return r[0] || null;
 }
 
 // 建课/改课共用的字段收集。只收请求里出现过的键,与 projects.ts 的 collectContent 同一套
@@ -71,6 +78,14 @@ function collectCourse(body: Record<string, unknown>, { creating }: { creating: 
   return { fields };
 }
 
+// 列表页带 lesson_count 子查询的列集合(公开列表与后台列表共用形状)。
+// getTableColumns 展开 = "全部列 + 附加计算列"的标准写法(直接 spread
+// 表对象会把 enableRLS 之类非列属性带进去)。
+const courseWithCount = {
+  ...getTableColumns(courses),
+  lesson_count: sql<number>`(SELECT count(*)::int FROM course_lessons l WHERE l.course_id = ${courses.id})`.as('lesson_count'),
+};
+
 const courseRoutes: RouteHandler = async (ctx, D) => {
   const { method, seg, body, user, query: qs } = ctx;
   if (seg[0] !== 'api') return;
@@ -81,12 +96,10 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
   if (method === 'GET' && seg[1] === 'courses' && !seg[2]) {
     const track = qs.get('track');
     if (track && !TRACKS.has(track)) return D({ error: '未知的课程分类' }, 400);
-    const r = await query(
-      `SELECT c.*, (SELECT count(*)::int FROM course_lessons l WHERE l.course_id=c.id) AS lesson_count
-         FROM courses c
-        WHERE c.status='published' AND ($1::text IS NULL OR c.track=$1)
-        ORDER BY c.featured DESC, c.created_at DESC`, [track || null]);
-    return D({ courses: r.rows.map(card) });
+    const r = await db.select(courseWithCount).from(courses)
+      .where(and(eq(courses.status, 'published'), track ? eq(courses.track, track) : undefined))
+      .orderBy(desc(courses.featured), desc(courses.created_at));
+    return D({ courses: r.map(card) });
   }
 
   // GET /api/courses/:slug
@@ -96,19 +109,22 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     // 不向匿名/普通成员泄露"这门课存在"。
     const maySee = c && (c.status === 'published' || (user && user.role === 'admin'));
     if (!maySee) return D({ error: 'not found' }, 404);
-    const ls = await query(
-      'SELECT * FROM course_lessons WHERE course_id=$1 ORDER BY position', [c.id]);
+    const ls = await db.select().from(courseLessons)
+      .where(eq(courseLessons.course_id, c.id))
+      .orderBy(courseLessons.position);
     let enrollment = null;
     if (user) {
-      const e = await query(
-        `SELECT id,status,created_at FROM course_enrollments
-          WHERE course_id=$1 AND user_id=$2 ORDER BY created_at DESC LIMIT 1`, [c.id, user.id]);
-      enrollment = e.rows[0] || null;
+      const e = await db.select({
+        id: courseEnrollments.id, status: courseEnrollments.status, created_at: courseEnrollments.created_at,
+      }).from(courseEnrollments)
+        .where(and(eq(courseEnrollments.course_id, c.id), eq(courseEnrollments.user_id, user.id)))
+        .orderBy(desc(courseEnrollments.created_at)).limit(1);
+      enrollment = e[0] || null;
     }
     return D({
-      course: { ...card(c), description: c.description, audience: c.audience,
-                lesson_count: ls.rowCount },
-      lessons: (ls.rows as any[]).map(lessonRow),
+      course: { ...card({ ...c, lesson_count: undefined }), description: c.description, audience: c.audience,
+                lesson_count: ls.length },
+      lessons: ls.map(lessonRow),
       enrollment,
     });
   }
@@ -121,19 +137,21 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     // 课纲还没排的课不接受申请。上游用 contentStatus='pending_upload' 挡这条路径,
     // 我方没有那个字段,等价条件就是"一节课都没有" —— 否则站长的申请队列里会出现
     // 一堆"申请一门什么都没有的课",而申请人也不知道自己申请了什么。
-    const ls = await query(
-      'SELECT count(*)::int AS n FROM course_lessons WHERE course_id=$1', [c.id]);
-    if (!(ls.rows[0] as any).n) return D({ error: '这门课的课纲还在整理中,暂时不能申请' }, 409);
+    const ls = await db.select({ n: sql<number>`count(*)::int` }).from(courseLessons)
+      .where(eq(courseLessons.course_id, c.id));
+    if (!ls[0].n) return D({ error: '这门课的课纲还在整理中,暂时不能申请' }, 409);
     const message = str(body.message, 500) || null;
     try {
-      const r = await query(
-        `INSERT INTO course_enrollments (course_id,user_id,message)
-         VALUES ($1,$2,$3) RETURNING id,status,created_at`, [c.id, user.id, message]);
-      return D({ enrollment: r.rows[0] });
+      const r = await db.insert(courseEnrollments).values({
+        course_id: c.id, user_id: user.id, message,
+      }).returning({
+        id: courseEnrollments.id, status: courseEnrollments.status, created_at: courseEnrollments.created_at,
+      });
+      return D({ enrollment: r[0] });
     } catch (e) {
       // 23505 = 唯一约束冲突。两条部分唯一索引各挡一种情况:已有待处理申请、已经通过。
-      // 靠数据库而不是"先查后插"——后者在并发下会漏。
-      if ((e as any) && (e as any).code === '23505') return D({ error: '你已经申请过这门课了' }, 409);
+      // 靠数据库而不是"先查后插"——后者在并发下会漏。pgCode 兼容 drizzle 包装与裸 pg。
+      if (pgCode(e) === '23505') return D({ error: '你已经申请过这门课了' }, 409);
       throw e;
     }
   }
@@ -141,13 +159,20 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
   // GET /api/my/courses
   if (method === 'GET' && seg[1] === 'my' && seg[2] === 'courses' && !seg[3]) {
     if (!user) return D({ error: '请先登录' }, 401);
-    const r = await query(
-      `SELECT c.*, e.status AS enrollment_status, e.created_at AS enrollment_created_at,
-              (SELECT count(*)::int FROM course_lessons l WHERE l.course_id=c.id) AS lesson_count
-         FROM course_enrollments e JOIN courses c ON c.id=e.course_id
-        WHERE e.user_id=$1 ORDER BY e.created_at DESC`, [user.id]);
-    return D({ courses: (r.rows as any[]).map(row => ({
-      ...card(row),
+    const r = await db.select({
+      id: courses.id, slug: courses.slug, title: courses.title, subject: courses.subject,
+      track: courses.track, summary: courses.summary, instructors: courses.instructors,
+      total_hours: courses.total_hours, featured: courses.featured, status: courses.status,
+      created_at: courses.created_at,
+      enrollment_status: courseEnrollments.status,
+      enrollment_created_at: courseEnrollments.created_at,
+      lesson_count: sql<number>`(SELECT count(*)::int FROM course_lessons l WHERE l.course_id = ${courses.id})`,
+    }).from(courseEnrollments)
+      .innerJoin(courses, eq(courses.id, courseEnrollments.course_id))
+      .where(eq(courseEnrollments.user_id, user.id))
+      .orderBy(desc(courseEnrollments.created_at));
+    return D({ courses: r.map(row => ({
+      ...card(row), lesson_count: row.lesson_count,
       enrollment_status: row.enrollment_status,
       enrollment_created_at: row.enrollment_created_at,
     })) });
@@ -161,15 +186,14 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
   if (method === 'GET' && seg[2] === 'courses' && !seg[3]) {
     const status = qs.get('status');
     if (status && !STATUSES.has(status)) return D({ error: '未知的课程状态' }, 400);
-    const r = await query(
-      `SELECT c.*, (SELECT count(*)::int FROM course_lessons l WHERE l.course_id=c.id) AS lesson_count
-         FROM courses c WHERE ($1::text IS NULL OR c.status=$1)
-        ORDER BY c.created_at DESC`, [status || null]);
+    const r = await db.select(courseWithCount).from(courses)
+      .where(status ? eq(courses.status, status) : undefined)
+      .orderBy(desc(courses.created_at));
     // 后台列表**必须给全字段**:后台的编辑表单直接拿这里的对象回填(startEdit(c) 读
     // c.description / c.audience),少给一个,表单里就是空串;保存时整份表单 PATCH 上去,
     // collectCourse 见到 typeof ''==='string' 就把那一列写成 null —— 站长只想改个标题,
     // 详细介绍却被静默清空。card() 是给公开列表用的瘦身版,不能复用到这里。
-    return D({ courses: (r.rows as any[]).map(c => ({
+    return D({ courses: r.map(c => ({
       ...card(c),
       description: c.description, audience: c.audience, review_note: c.review_note,
     })) });
@@ -180,13 +204,13 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     const got = collectCourse(body, { creating: true });
     if ('error' in got) return D({ error: got.error }, 400);
     const slug = await uniqueSlug(String(got.fields.title), 'courses');
-    const keys = Object.keys(got.fields);
-    const cols = ['slug', ...keys, 'created_by'];
-    const vals: unknown[] = [slug, ...keys.map(k => got.fields[k]), user!.id];
-    const ph = cols.map((_, i) => `$${i + 1}`).join(',');
-    const r = await query(
-      `INSERT INTO courses (${cols.join(',')}) VALUES (${ph}) RETURNING *`, vals);
-    return D({ course: card(r.rows[0]) });
+    // creating:true 时 collectCourse 已保证 title/track 必在 fields 里,
+    // cast 只是把 Record 收窄回 insert 的行类型。
+    const r = await db.insert(courses).values({
+      ...(got.fields as { title: string; track: string } & Record<string, string | number | boolean | null>),
+      slug, created_by: user!.id,
+    }).returning();
+    return D({ course: card(r[0]) });
   }
 
   // PATCH /api/admin/courses/:id
@@ -195,14 +219,11 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     if ('error' in got) return D({ error: got.error }, 400);
     const keys = Object.keys(got.fields);
     if (!keys.length) return D({ error: '没有要改的内容' }, 400);
-    const sets = keys.map((k, i) => `${k}=$${i + 1}`);
-    const vals: unknown[] = keys.map(k => got.fields[k]);
-    vals.push(seg[3]);
-    const r = await query(
-      `UPDATE courses SET ${sets.join(',')}, updated_at=now()
-        WHERE id=$${vals.length} RETURNING *`, vals);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
-    return D({ course: card(r.rows[0]) });
+    const sets = { ...(got.fields as Record<string, any>), updated_at: sql`now()` };
+    const r = await db.update(courses).set(sets)
+      .where(eq(courses.id, Number(seg[3]))).returning();
+    if (!r.length) return D({ error: 'not found' }, 404);
+    return D({ course: card(r[0]) });
   }
 
   // POST /api/admin/courses/:id/review
@@ -211,14 +232,15 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     if (decision !== 'approve' && decision !== 'reject') {
       return D({ error: 'decision 只能是 approve 或 reject' }, 400);
     }
-    const cur = await query('SELECT status FROM courses WHERE id=$1', [seg[3]]);
-    if (!cur.rowCount) return D({ error: 'not found' }, 404);
+    const cur = await db.select({ status: courses.status }).from(courses)
+      .where(eq(courses.id, Number(seg[3])));
+    if (!cur.length) return D({ error: 'not found' }, 404);
     const next = decision === 'approve' ? 'published' : 'draft';
-    const r = await query(
-      `UPDATE courses SET status=$1, review_note=$2, reviewed_by=$3, reviewed_at=now(),
-              updated_at=now() WHERE id=$4 RETURNING *`,
-      [next, str(body.note, 500) || null, user!.id, seg[3]]);
-    return D({ course: card(r.rows[0]) });
+    const r = await db.update(courses).set({
+      status: next, review_note: str(body.note, 500) || null,
+      reviewed_by: user!.id, reviewed_at: sql`now()`, updated_at: sql`now()`,
+    }).where(eq(courses.id, Number(seg[3]))).returning();
+    return D({ course: card(r[0]) });
   }
 
   // POST /api/admin/courses/:id/lessons
@@ -227,14 +249,15 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     if (!title) return D({ error: '请填写课节标题' }, 400);
     const dm = body.duration_minutes === undefined ? 0 : Number(body.duration_minutes);
     if (!Number.isInteger(dm) || dm < 0 || dm > 100000) return D({ error: '课节时长不合法' }, 400);
-    const c = await query('SELECT 1 FROM courses WHERE id=$1', [seg[3]]);
-    if (!c.rowCount) return D({ error: 'not found' }, 404);
-    const r = await query(
-      `INSERT INTO course_lessons (course_id,position,title,summary,duration_minutes)
-       VALUES ($1,(SELECT COALESCE(MAX(position),0)+1 FROM course_lessons WHERE course_id=$1),
-               $2,$3,$4) RETURNING *`,
-      [seg[3], title, str(body.summary, 1000) || null, dm]);
-    return D({ lesson: lessonRow(r.rows[0]) });
+    const c = await db.select({ one: sql`1` }).from(courses).where(eq(courses.id, Number(seg[3])));
+    if (!c.length) return D({ error: 'not found' }, 404);
+    const r = await db.insert(courseLessons).values({
+      course_id: Number(seg[3]),
+      // position = 当前最大值 + 1(子查询取 max,空表时 COALESCE 到 0)
+      position: sql`(SELECT COALESCE(MAX(position),0)+1 FROM course_lessons WHERE course_id = ${Number(seg[3])})`,
+      title, summary: str(body.summary, 1000) || null, duration_minutes: dm,
+    }).returning();
+    return D({ lesson: lessonRow(r[0]) });
   }
 
   // POST /api/admin/courses/:id/lessons/reorder
@@ -242,8 +265,10 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
       && seg[5] === 'reorder' && !seg[6]) {
     const ids = body.lesson_ids;
     if (!Array.isArray(ids) || !ids.length) return D({ error: 'lesson_ids 需要是非空数组' }, 400);
-    const cur = await query('SELECT id FROM course_lessons WHERE course_id=$1', [seg[3]]);
-    const have = (cur.rows as any[]).map(x => Number(x.id)).sort((a, b) => a - b);
+    const courseId = Number(seg[3]);
+    const cur = await db.select({ id: courseLessons.id }).from(courseLessons)
+      .where(eq(courseLessons.course_id, courseId));
+    const have = cur.map(x => Number(x.id)).sort((a, b) => a - b);
     const want = (ids as unknown[]).map(Number).sort((a, b) => a - b);
     // 必须是该课全部课节的一个排列 —— 漏掉一条会留下空洞,混入别的课的课节会把它抢过来。
     // 一次提交完整顺序比"上移/下移一格"更好测也更幂等,这是相对上游的有意改动。
@@ -257,8 +282,8 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
       // 将来若真要加那条唯一约束,得写成 DEFERRABLE INITIALLY DEFERRED,并把
       // CHECK 一起放宽,那时再回来改这里。
       for (let i = 0; i < ids.length; i++) {
-        await c.query('UPDATE course_lessons SET position=$1 WHERE id=$2 AND course_id=$3',
-                      [i + 1, ids[i], seg[3]]);
+        await c.update(courseLessons).set({ position: i + 1 })
+          .where(and(eq(courseLessons.id, Number(ids[i])), eq(courseLessons.course_id, courseId)));
       }
     });
     return D({ ok: true });
@@ -266,42 +291,40 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
 
   // PATCH /api/admin/lessons/:id
   if (method === 'PATCH' && seg[2] === 'lessons' && seg[3] && !seg[4]) {
-    const sets: string[] = [], vals: unknown[] = [];
+    const sets: Record<string, unknown> = {};
     if (typeof body.title === 'string') {
       const t = str(body.title, 120);
       if (!t) return D({ error: '请填写课节标题' }, 400);
-      sets.push(`title=$${sets.length + 1}`); vals.push(t);
+      sets.title = t;
     }
-    if (typeof body.summary === 'string') {
-      sets.push(`summary=$${sets.length + 1}`); vals.push(str(body.summary, 1000) || null);
-    }
+    if (typeof body.summary === 'string') sets.summary = str(body.summary, 1000) || null;
     if (body.duration_minutes !== undefined) {
       const dm = Number(body.duration_minutes);
       if (!Number.isInteger(dm) || dm < 0 || dm > 100000) return D({ error: '课节时长不合法' }, 400);
-      sets.push(`duration_minutes=$${sets.length + 1}`); vals.push(dm);
+      sets.duration_minutes = dm;
     }
-    if (!sets.length) return D({ error: '没有要改的内容' }, 400);
-    vals.push(seg[3]);
-    const r = await query(
-      `UPDATE course_lessons SET ${sets.join(',')} WHERE id=$${vals.length} RETURNING *`, vals);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
-    return D({ lesson: lessonRow(r.rows[0]) });
+    if (!Object.keys(sets).length) return D({ error: '没有要改的内容' }, 400);
+    const r = await db.update(courseLessons).set(sets)
+      .where(eq(courseLessons.id, Number(seg[3]))).returning();
+    if (!r.length) return D({ error: 'not found' }, 404);
+    return D({ lesson: lessonRow(r[0]) });
   }
 
   // DELETE /api/admin/lessons/:id
   if (method === 'DELETE' && seg[2] === 'lessons' && seg[3] && !seg[4]) {
     const done = await tx(async (c) => {
-      const r = await c.query(
-        'DELETE FROM course_lessons WHERE id=$1 RETURNING course_id', [seg[3]]);
-      if (!r.rowCount) return false;
+      const r = await c.delete(courseLessons)
+        .where(eq(courseLessons.id, Number(seg[3])))
+        .returning({ course_id: courseLessons.course_id });
+      if (!r.length) return false;
       // 删掉中间一节会在 position 序列里留个洞。重排成连续的,免得前端拿 position
       // 当序号显示时出现 "01 03 04"。
-      const rest = await c.query(
-        'SELECT id FROM course_lessons WHERE course_id=$1 ORDER BY position',
-        [(r.rows[0] as any).course_id]);
-      for (let i = 0; i < rest.rows.length; i++) {
-        await c.query('UPDATE course_lessons SET position=$1 WHERE id=$2',
-                      [i + 1, (rest.rows[i] as any).id]);
+      const rest = await c.select({ id: courseLessons.id }).from(courseLessons)
+        .where(eq(courseLessons.course_id, r[0].course_id))
+        .orderBy(courseLessons.position);
+      for (let i = 0; i < rest.length; i++) {
+        await c.update(courseLessons).set({ position: i + 1 })
+          .where(eq(courseLessons.id, rest[i].id));
       }
       return true;
     });
@@ -314,18 +337,19 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     if (status && !['pending', 'approved', 'rejected'].includes(status)) {
       return D({ error: '未知的申请状态' }, 400);
     }
-    // 逐列点名,不用 u.* —— 站长审报名不需要申请人邮箱,别让这个端点变成第二个
+    // 逐列点名,不 join 邮箱 —— 站长审报名不需要申请人邮箱,别让这个端点变成第二个
     // 会吐他人邮箱的接口(目前唯一一个是 GET /api/admin/users/pending)。
-    const r = await query(
-      `SELECT e.id, e.status, e.message, e.created_at,
-              c.slug AS course_slug, c.title AS course_title,
-              u.username, u.display_name
-         FROM course_enrollments e
-         JOIN courses c ON c.id=e.course_id
-         JOIN users u ON u.id=e.user_id
-        WHERE ($1::text IS NULL OR e.status=$1)
-        ORDER BY e.created_at DESC`, [status || null]);
-    return D({ requests: (r.rows as any[]).map(x => ({
+    const r = await db.select({
+      id: courseEnrollments.id, status: courseEnrollments.status,
+      message: courseEnrollments.message, created_at: courseEnrollments.created_at,
+      course_slug: courses.slug, course_title: courses.title,
+      username: users.username, display_name: users.display_name,
+    }).from(courseEnrollments)
+      .innerJoin(courses, eq(courses.id, courseEnrollments.course_id))
+      .innerJoin(users, eq(users.id, courseEnrollments.user_id))
+      .where(status ? eq(courseEnrollments.status, status) : undefined)
+      .orderBy(desc(courseEnrollments.created_at));
+    return D({ requests: r.map(x => ({
       id: x.id, status: x.status, message: x.message, created_at: x.created_at,
       course: { slug: x.course_slug, title: x.course_title },
       user: { username: x.username, display_name: x.display_name },
@@ -339,21 +363,23 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     if (decision !== 'approve' && decision !== 'reject') {
       return D({ error: 'decision 只能是 approve 或 reject' }, 400);
     }
-    const cur = await query(
-      `SELECT e.id, e.status, e.user_id, c.title
-         FROM course_enrollments e JOIN courses c ON c.id=e.course_id
-        WHERE e.id=$1`, [seg[3]]);
-    if (!cur.rowCount) return D({ error: 'not found' }, 404);
-    if ((cur.rows[0] as any).status !== 'pending') return D({ error: '这条申请已经处理过了' }, 409);
+    const cur = await db.select({
+      id: courseEnrollments.id, status: courseEnrollments.status,
+      user_id: courseEnrollments.user_id, title: courses.title,
+    }).from(courseEnrollments)
+      .innerJoin(courses, eq(courses.id, courseEnrollments.course_id))
+      .where(eq(courseEnrollments.id, Number(seg[3])));
+    if (!cur.length) return D({ error: 'not found' }, 404);
+    if (cur[0].status !== 'pending') return D({ error: '这条申请已经处理过了' }, 409);
     const next = decision === 'approve' ? 'approved' : 'rejected';
-    await query(
-      `UPDATE course_enrollments SET status=$1, decided_by=$2, decided_at=now() WHERE id=$3`,
-      [next, user!.id, seg[3]]);
-    await notify((cur.rows[0] as any).user_id, 'course',
+    await db.update(courseEnrollments).set({
+      status: next, decided_by: user!.id, decided_at: sql`now()`,
+    }).where(eq(courseEnrollments.id, Number(seg[3])));
+    await notify(cur[0].user_id, 'course',
       next === 'approved' ? '课程学习申请已通过' : '课程学习申请未通过',
       next === 'approved'
-        ? `你可以开始学习「${(cur.rows[0] as any).title}」了。`
-        : `「${(cur.rows[0] as any).title}」这次没有通过,可以过段时间再申请。`);
+        ? `你可以开始学习「${cur[0].title}」了。`
+        : `「${cur[0].title}」这次没有通过,可以过段时间再申请。`);
     return D({ ok: true, status: next });
   }
 };

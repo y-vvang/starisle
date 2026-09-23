@@ -1,13 +1,18 @@
-import { query, tx } from '../db/pool';
+import { and, desc, asc, eq, sql } from 'drizzle-orm';
+import { db, tx, pgCode } from '../db/pool';
+import { domains, projectFollows, projectJoinRequests, projectMembers, projects, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
 import { notify } from './notifications';
 import { str } from '../lib/str';
 import type { RouteHandler } from './types';
 
-const card = (p: any) => ({ slug: p.slug, name: p.name, tagline: p.tagline, repo_url: p.repo_url,
-                            domain_id: p.domain_id, status: p.status, created_at: p.created_at,
-                            owner: p.owner_username ? { username: p.owner_username,
-                                                        display_name: p.owner_display_name } : undefined });
+const card = (p: { slug: string; name: string; tagline: string | null; repo_url: string | null;
+                    domain_id: string | null; status: string; created_at: Date;
+                    owner_username?: string; owner_display_name?: string | null }) =>
+  ({ slug: p.slug, name: p.name, tagline: p.tagline, repo_url: p.repo_url,
+     domain_id: p.domain_id, status: p.status, created_at: p.created_at,
+     owner: p.owner_username ? { username: p.owner_username,
+                                 display_name: p.owner_display_name } : undefined });
 
 // 海报存成 base64 data URI 的 text 列(不引入静态文件服务/对象存储)。
 // 上限按字符数卡:700,000 字符的 data URI ≈ 512KB 解码后的原图,对一张
@@ -65,11 +70,11 @@ function parseGaps(v: unknown): { error: string } | { value: { skill: string; no
 
 // 只收请求里真的出现过的键。这样 PATCH 只传 work 不会把另外三块连带清空,
 // 而显式传 [] 仍然能清空 —— "没传"和"传空"是两件事。
-// jsonb 列一律传 JSON 字符串:node-postgres 会把 JS 数组当成 Postgres array 处理,
-// 直接传数组会类型不匹配。
+// jsonb 三块返回 JS 值(builder 路径 drizzle 内部序列化,不再手工 stringify;
+// 那是裸 pg 路径的要求)。
 function collectContent(body: Record<string, unknown>):
-    { error: string } | { fields: Record<string, string | null> } {
-  const fields: Record<string, string | null> = {};
+    { error: string } | { fields: { work?: string | null; stack?: string[]; milestones?: string[]; gaps?: { skill: string; note: string }[] } } {
+  const fields: { work?: string | null; stack?: string[]; milestones?: string[]; gaps?: { skill: string; note: string }[] } = {};
   if (typeof body.work === 'string') {
     const w = body.work.trim();
     if (w.length > WORK_MAX) return { error: `主要工作不能超过 ${WORK_MAX} 字` };
@@ -79,32 +84,45 @@ function collectContent(body: Record<string, unknown>):
     if (body[key] === undefined) continue;
     const r = parseStringList(body[key], label);
     if ('error' in r) return { error: r.error };
-    fields[key] = JSON.stringify(r.value);
+    fields[key] = r.value;
   }
   if (body.gaps !== undefined) {
     const r = parseGaps(body.gaps);
     if ('error' in r) return { error: r.error };
-    fields.gaps = JSON.stringify(r.value);
+    fields.gaps = r.value;
   }
   return { fields };
 }
 
+// 详情页要 owner 名;列表页同样要(卡片带 owner)。join 形状在这里统一。
+const projectWithOwner = {
+  // 列点名点齐(p.* 等价物):
+  id: projects.id, slug: projects.slug, name: projects.name, tagline: projects.tagline,
+  description: projects.description, repo_url: projects.repo_url, domain_id: projects.domain_id,
+  status: projects.status, owner_id: projects.owner_id, review_note: projects.review_note,
+  reviewed_by: projects.reviewed_by, reviewed_at: projects.reviewed_at,
+  created_at: projects.created_at, updated_at: projects.updated_at,
+  poster: projects.poster, work: projects.work, stack: projects.stack,
+  milestones: projects.milestones, gaps: projects.gaps,
+  owner_username: users.username, owner_display_name: users.display_name,
+};
+
 async function loadProject(slug: string) {
-  const r = await query(
-    `SELECT p.*, u.username AS owner_username, u.display_name AS owner_display_name
-       FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.slug=$1`, [slug]);
-  return (r.rows[0] as any) || null;
+  const r = await db.select(projectWithOwner).from(projects)
+    .innerJoin(users, eq(users.id, projects.owner_id))
+    .where(eq(projects.slug, slug));
+  return r[0] || null;
 }
 
 const projectRoutes: RouteHandler = async (ctx, D) => {
   const { method, path, seg, body, user } = ctx;
 
   if (method === 'GET' && path === '/api/projects') {
-    const r = await query(
-      `SELECT p.*, u.username AS owner_username, u.display_name AS owner_display_name
-         FROM projects p JOIN users u ON u.id=p.owner_id
-        WHERE p.status='approved' ORDER BY p.created_at DESC`);
-    return D({ projects: r.rows.map(card) });
+    const r = await db.select(projectWithOwner).from(projects)
+      .innerJoin(users, eq(users.id, projects.owner_id))
+      .where(eq(projects.status, 'approved'))
+      .orderBy(desc(projects.created_at));
+    return D({ projects: r.map(card) });
   }
 
   if (method === 'POST' && path === '/api/projects') {
@@ -116,8 +134,8 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
 
     const domain_id = str(body.domain_id, 32) || null;
     if (domain_id) {
-      const d = await query('SELECT 1 FROM domains WHERE id=$1', [domain_id]);
-      if (!d.rowCount) return D({ error: '未知领域' }, 400);
+      const d = await db.select({ one: sql`1` }).from(domains).where(eq(domains.id, domain_id));
+      if (!d.length) return D({ error: '未知领域' }, 400);
     }
 
     const content = collectContent(body);
@@ -125,20 +143,21 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
 
     const slug = await uniqueSlug(name);
     const project = await tx(async (c) => {
-      const r = await c.query(
-        `INSERT INTO projects (slug,name,tagline,description,repo_url,domain_id,owner_id,status,
-                               work,stack,milestones,gaps)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10,$11) RETURNING *`,
-        [slug, name, str(body.tagline, 120), description, str(body.repo_url, 200) || null,
-         domain_id, user!.id,
-         content.fields.work ?? null,
-         content.fields.stack ?? '[]',
-         content.fields.milestones ?? '[]',
-         content.fields.gaps ?? '[]']);
-      await c.query(
-        `INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner')`,
-        [(r.rows[0] as any).id, user!.id]);
-      return r.rows[0] as any;
+      const r = await c.insert(projects).values({
+        slug, name, tagline: str(body.tagline, 120), description,
+        repo_url: str(body.repo_url, 200) || null, domain_id,
+        owner_id: user!.id, status: 'pending',
+        work: content.fields.work ?? null,
+        stack: content.fields.stack ?? [],
+        milestones: content.fields.milestones ?? [],
+        gaps: content.fields.gaps ?? [],
+      }).returning();
+      await c.insert(projectMembers).values({ project_id: r[0].id, user_id: user!.id, role: 'owner' });
+      // tx 回调里拿 drizzle 实例,再 join 一次把 owner 名补上(card 要用)
+      const full = await c.select(projectWithOwner).from(projects)
+        .innerJoin(users, eq(users.id, projects.owner_id))
+        .where(eq(projects.id, r[0].id));
+      return full[0];
     });
     return D({ ok: true, project: card(project),
                note: '已提交,站长审核通过后上线。' });
@@ -150,26 +169,29 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     const maySee = p && (p.status === 'approved' ||
       (user && (Number(user.id) === Number(p.owner_id) || user.role === 'admin')));
     if (!maySee) return D({ error: 'not found' }, 404);
-    const mem = await query(
-      `SELECT u.username,u.display_name,pm.role FROM project_members pm
-         JOIN users u ON u.id=pm.user_id WHERE pm.project_id=$1 ORDER BY pm.joined_at`, [p.id]);
-    const followers = await query(
-      'SELECT COUNT(*)::int AS n FROM project_follows WHERE project_id=$1', [p.id]);
+    const mem = await db.select({
+      username: users.username, display_name: users.display_name, role: projectMembers.role,
+    }).from(projectMembers)
+      .innerJoin(users, eq(users.id, projectMembers.user_id))
+      .where(eq(projectMembers.project_id, p.id))
+      .orderBy(projectMembers.joined_at);
+    const followers = await db.select({ n: sql<number>`COUNT(*)::int` })
+      .from(projectFollows).where(eq(projectFollows.project_id, p.id));
     let viewerState: Record<string, boolean> = {};
     if (user) {
-      const f = await query(
-        'SELECT 1 FROM project_follows WHERE project_id=$1 AND user_id=$2', [p.id, user.id]);
-      const j = await query(
-        `SELECT 1 FROM project_join_requests WHERE project_id=$1 AND user_id=$2 AND status='pending'`,
-        [p.id, user.id]);
-      viewerState = { following: !!f.rowCount, pending_join_request: !!j.rowCount };
+      const f = await db.select({ one: sql`1` }).from(projectFollows)
+        .where(and(eq(projectFollows.project_id, p.id), eq(projectFollows.user_id, user.id)));
+      const j = await db.select({ one: sql`1` }).from(projectJoinRequests)
+        .where(and(eq(projectJoinRequests.project_id, p.id), eq(projectJoinRequests.user_id, user.id),
+                  eq(projectJoinRequests.status, 'pending')));
+      viewerState = { following: !!f.length, pending_join_request: !!j.length };
     }
     // work/stack/milestones/gaps 只在详情给,不进 card() —— 列表页用不到,
     // 让 GET /api/projects 的响应体保持小。
     return D({ project: { ...card(p), description: p.description, poster: p.poster || null,
                           work: p.work, stack: p.stack, milestones: p.milestones, gaps: p.gaps,
-                          followers: (followers.rows[0] as any).n, ...viewerState },
-               members: mem.rows });
+                          followers: followers[0].n, ...viewerState },
+               members: mem });
   }
 
   if (method === 'PATCH' && seg[1] === 'projects' && seg[2] && !seg[3]) {
@@ -183,24 +205,24 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
       if (p.status !== 'approved') return D({ error: 'not found' }, 404);
       return D({ error: '只有发起人能修改' }, 403);
     }
-    const sets: string[] = [], vals: unknown[] = [];
+    // 列集合运行时才知道(只收出现过的键),值全部过校验 —— 与 auth.ts 的
+    // PATCH /api/me 同一取舍。
+    const sets: Record<string, unknown> = {};
     for (const f of ['name', 'tagline', 'description', 'repo_url']) {
-      if (typeof body[f] === 'string') { sets.push(`${f}=$${sets.length + 1}`); vals.push(str(body[f], 4000)); }
+      if (typeof body[f] === 'string') sets[f] = str(body[f], 4000);
     }
     if (typeof body.domain_id === 'string') {
-      const d = await query('SELECT 1 FROM domains WHERE id=$1', [body.domain_id]);
-      if (!d.rowCount) return D({ error: '未知领域' }, 400);
-      sets.push(`domain_id=$${sets.length + 1}`); vals.push(body.domain_id);
+      const d = await db.select({ one: sql`1` }).from(domains).where(eq(domains.id, body.domain_id));
+      if (!d.length) return D({ error: '未知领域' }, 400);
+      sets.domain_id = body.domain_id;
     }
     const content = collectContent(body);
     if ('error' in content) return D({ error: content.error }, 400);
-    for (const [k, v] of Object.entries(content.fields)) {
-      sets.push(`${k}=$${sets.length + 1}`); vals.push(v);
-    }
-    if (!sets.length) return D({ error: '没有要改的内容' }, 400);
-    vals.push(p.id);
+    for (const [k, v] of Object.entries(content.fields)) sets[k] = v;
+    if (!Object.keys(sets).length) return D({ error: '没有要改的内容' }, 400);
+    sets.updated_at = sql`now()`;
     // slug 一经创建不再变更,避免外链失效
-    await query(`UPDATE projects SET ${sets.join(',')}, updated_at=now() WHERE id=$${vals.length}`, vals);
+    await db.update(projects).set(sets).where(eq(projects.id, p.id));
     return D({ ok: true });
   }
 
@@ -215,18 +237,17 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     }
     if (!isOwner) return D({ error: '只有发起人能加成员' }, 403);
 
-    const u = await query(
-      `SELECT id,display_name FROM users WHERE username=$1 AND status='approved'`,
-      [str(body.username, 32).toLowerCase()]);
-    if (!u.rowCount) return D({ error: '没找到该成员' }, 404);
+    const u = await db.select({ id: users.id, display_name: users.display_name })
+      .from(users).where(and(eq(users.username, str(body.username, 32).toLowerCase()),
+                             eq(users.status, 'approved')));
+    if (!u.length) return D({ error: '没找到该成员' }, 404);
 
-    const dup = await query('SELECT 1 FROM project_members WHERE project_id=$1 AND user_id=$2',
-                            [p.id, (u.rows[0] as any).id]);
-    if (dup.rowCount) return D({ error: 'TA 已经在项目里了' }, 409);
+    const dup = await db.select({ one: sql`1` }).from(projectMembers)
+      .where(and(eq(projectMembers.project_id, p.id), eq(projectMembers.user_id, u[0].id)));
+    if (dup.length) return D({ error: 'TA 已经在项目里了' }, 409);
 
-    await query(`INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'member')`,
-                [p.id, (u.rows[0] as any).id]);
-    await notify((u.rows[0] as any).id, 'project', '你被加入了一个项目', `${user.display_name || user.username} 把你加进了「${p.name}」。`);
+    await db.insert(projectMembers).values({ project_id: p.id, user_id: u[0].id, role: 'member' });
+    await notify(u[0].id, 'project', '你被加入了一个项目', `${user.display_name || user.username} 把你加进了「${p.name}」。`);
     return D({ ok: true });
   }
 
@@ -244,7 +265,7 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     }
 
     if (method === 'DELETE') {
-      await query('UPDATE projects SET poster=NULL, updated_at=now() WHERE id=$1', [p.id]);
+      await db.update(projects).set({ poster: null, updated_at: sql`now()` }).where(eq(projects.id, p.id));
       return D({ ok: true });
     }
 
@@ -256,7 +277,7 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     if (!POSTER_RE.test(poster)) {
       return D({ error: '海报格式不对,需要 PNG/JPEG/WebP/GIF 的 base64 data URI' }, 400);
     }
-    await query('UPDATE projects SET poster=$1, updated_at=now() WHERE id=$2', [poster, p.id]);
+    await db.update(projects).set({ poster, updated_at: sql`now()` }).where(eq(projects.id, p.id));
     return D({ ok: true });
   }
 
@@ -271,25 +292,26 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     if (p.status !== 'approved' && !isOwnerOrAdmin) return D({ error: 'not found' }, 404);
 
     if (method === 'GET') {
-      const f = await query(
-        'SELECT 1 FROM project_follows WHERE project_id=$1 AND user_id=$2', [p.id, user.id]);
-      const cnt = await query(
-        'SELECT COUNT(*)::int AS n FROM project_follows WHERE project_id=$1', [p.id]);
-      return D({ following: !!f.rowCount, followers: (cnt.rows[0] as any).n });
+      const f = await db.select({ one: sql`1` }).from(projectFollows)
+        .where(and(eq(projectFollows.project_id, p.id), eq(projectFollows.user_id, user.id)));
+      const cnt = await db.select({ n: sql<number>`COUNT(*)::int` })
+        .from(projectFollows).where(eq(projectFollows.project_id, p.id));
+      return D({ following: !!f.length, followers: cnt[0].n });
     }
 
     const wantFollow = body.follow !== false;
     if (wantFollow) {
       // 复合主键(project_id,user_id)保证重复关注在数据库层面就只留一行,
       // 不是旧实现那种"裸计数器,重复 POST 就无限往上加"。
-      await query(
-        `INSERT INTO project_follows (project_id,user_id) VALUES ($1,$2)
-         ON CONFLICT (project_id,user_id) DO NOTHING`, [p.id, user.id]);
+      await db.insert(projectFollows).values({ project_id: p.id, user_id: user.id })
+        .onConflictDoNothing();
     } else {
-      await query('DELETE FROM project_follows WHERE project_id=$1 AND user_id=$2', [p.id, user.id]);
+      await db.delete(projectFollows)
+        .where(and(eq(projectFollows.project_id, p.id), eq(projectFollows.user_id, user.id)));
     }
-    const cnt = await query('SELECT COUNT(*)::int AS n FROM project_follows WHERE project_id=$1', [p.id]);
-    return D({ ok: true, following: wantFollow, followers: (cnt.rows[0] as any).n });
+    const cnt = await db.select({ n: sql<number>`COUNT(*)::int` })
+      .from(projectFollows).where(eq(projectFollows.project_id, p.id));
+    return D({ ok: true, following: wantFollow, followers: cnt[0].n });
   }
 
   // ---------- 加入申请:提交 ----------
@@ -303,30 +325,31 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
       return D({ error: '发起人不能申请加入自己的项目' }, 400);
     }
 
-    const already = await query(
-      'SELECT 1 FROM project_members WHERE project_id=$1 AND user_id=$2', [p.id, user.id]);
-    if (already.rowCount) return D({ error: '你已经是项目成员了' }, 409);
+    const already = await db.select({ one: sql`1` }).from(projectMembers)
+      .where(and(eq(projectMembers.project_id, p.id), eq(projectMembers.user_id, user.id)));
+    if (already.length) return D({ error: '你已经是项目成员了' }, 409);
 
-    const dup = await query(
-      `SELECT 1 FROM project_join_requests WHERE project_id=$1 AND user_id=$2 AND status='pending'`,
-      [p.id, user.id]);
-    if (dup.rowCount) return D({ error: '你已经提交过申请,请等待处理' }, 409);
+    const dup = await db.select({ one: sql`1` }).from(projectJoinRequests)
+      .where(and(eq(projectJoinRequests.project_id, p.id), eq(projectJoinRequests.user_id, user.id),
+                 eq(projectJoinRequests.status, 'pending')));
+    if (dup.length) return D({ error: '你已经提交过申请,请等待处理' }, 409);
 
     const message = str(body.message, 500);
     let ins;
     try {
-      ins = await query(
-        `INSERT INTO project_join_requests (project_id,user_id,message) VALUES ($1,$2,$3) RETURNING id`,
-        [p.id, user.id, message || null]);
+      ins = await db.insert(projectJoinRequests).values({
+        project_id: p.id, user_id: user.id, message: message || null,
+      }).returning({ id: projectJoinRequests.id });
     } catch (e) {
       // 与上面的预检查同一条规则的数据库兜底:并发下两个请求可能都读到"没有
       // 待处理申请",这时部分唯一索引(见 002 迁移)会拒绝第二条 INSERT。
-      if ((e as any)?.code === '23505') return D({ error: '你已经提交过申请,请等待处理' }, 409);
+      // pgCode 兼容 drizzle 包装错误(.cause.code)与裸 pg 错误(.code)。
+      if (pgCode(e) === '23505') return D({ error: '你已经提交过申请,请等待处理' }, 409);
       throw e;
     }
     await notify(p.owner_id, 'project', '有人申请加入项目',
       `${user.display_name || user.username} 申请加入「${p.name}」。`);
-    return D({ ok: true, id: (ins.rows[0] as any).id });
+    return D({ ok: true, id: ins[0].id });
   }
 
   // ---------- 加入申请:列表,只有 owner 或站长能看 ----------
@@ -339,12 +362,16 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
       if (p.status !== 'approved') return D({ error: 'not found' }, 404);
       return D({ error: '只有发起人能看申请列表' }, 403);
     }
-    const r = await query(
-      `SELECT jr.id, jr.message, jr.status, jr.created_at, jr.decided_at,
-              u.username, u.display_name
-         FROM project_join_requests jr JOIN users u ON u.id = jr.user_id
-        WHERE jr.project_id=$1 ORDER BY jr.created_at DESC`, [p.id]);
-    return D({ requests: r.rows });
+    const r = await db.select({
+      id: projectJoinRequests.id, message: projectJoinRequests.message,
+      status: projectJoinRequests.status, created_at: projectJoinRequests.created_at,
+      decided_at: projectJoinRequests.decided_at,
+      username: users.username, display_name: users.display_name,
+    }).from(projectJoinRequests)
+      .innerJoin(users, eq(users.id, projectJoinRequests.user_id))
+      .where(eq(projectJoinRequests.project_id, p.id))
+      .orderBy(desc(projectJoinRequests.created_at));
+    return D({ requests: r });
   }
 
   // ---------- 加入申请:处理(accept/reject),只有该项目 owner 或站长 ----------
@@ -354,12 +381,15 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
   if (method === 'POST' && seg[1] === 'join-requests' && seg[2] && seg[3] === 'decision' && !seg[4]) {
     if (!user) return D({ error: '请先登录' }, 401);
     const id = Number(seg[2]);
-    const r = await query(
-      `SELECT jr.*, p.owner_id, p.name AS project_name
-         FROM project_join_requests jr JOIN projects p ON p.id = jr.project_id
-        WHERE jr.id=$1`, [id]);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
-    const row = r.rows[0] as any;
+    const r = await db.select({
+      id: projectJoinRequests.id, project_id: projectJoinRequests.project_id,
+      user_id: projectJoinRequests.user_id, status: projectJoinRequests.status,
+      owner_id: projects.owner_id, project_name: projects.name,
+    }).from(projectJoinRequests)
+      .innerJoin(projects, eq(projects.id, projectJoinRequests.project_id))
+      .where(eq(projectJoinRequests.id, id));
+    if (!r.length) return D({ error: 'not found' }, 404);
+    const row = r[0];
     const isOwnerOrAdmin = Number(row.owner_id) === Number(user.id) || user.role === 'admin';
     if (!isOwnerOrAdmin) return D({ error: '只有发起人能处理申请' }, 403);
     if (row.status !== 'pending') return D({ error: '该申请已处理' }, 409);
@@ -371,13 +401,12 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     // 同一事务:标记申请 + 加入 project_members,要么两个都发生,要么都不发生——
     // 不会出现"申请显示已通过,但其实没被加进项目"这种旧 bug 的新变种。
     await tx(async (c) => {
-      await c.query(
-        `UPDATE project_join_requests SET status=$1, decided_by=$2, decided_at=now() WHERE id=$3`,
-        [decision, user!.id, id]);
+      await c.update(projectJoinRequests).set({
+        status: decision, decided_by: user!.id, decided_at: sql`now()`,
+      }).where(eq(projectJoinRequests.id, id));
       if (decision === 'accepted') {
-        await c.query(
-          `INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'member')
-           ON CONFLICT DO NOTHING`, [row.project_id, row.user_id]);
+        await c.insert(projectMembers).values({ project_id: row.project_id, user_id: row.user_id, role: 'member' })
+          .onConflictDoNothing();
       }
     });
 
@@ -389,18 +418,19 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
   }
 
   if (method === 'GET' && path === '/api/admin/projects/pending') {
-    const r = await query(
-      `SELECT p.*, u.username AS owner_username, u.display_name AS owner_display_name
-         FROM projects p JOIN users u ON u.id=p.owner_id
-        WHERE p.status='pending' ORDER BY p.created_at ASC`);
-    return D({ projects: r.rows.map((p: any) => ({ ...card(p), id: p.id, description: p.description })) });
+    const r = await db.select(projectWithOwner).from(projects)
+      .innerJoin(users, eq(users.id, projects.owner_id))
+      .where(eq(projects.status, 'pending'))
+      .orderBy(asc(projects.created_at));
+    return D({ projects: r.map(p => ({ ...card(p), id: p.id, description: p.description })) });
   }
 
   if (method === 'POST' && seg[1] === 'admin' && seg[2] === 'projects' && seg[3] && seg[4] === 'review') {
     const id = Number(seg[3]);
-    const r = await query('SELECT id,name,status,owner_id FROM projects WHERE id=$1', [id]);
-    if (!r.rowCount) return D({ error: 'not found' }, 404);
-    if ((r.rows[0] as any).status !== 'pending') return D({ error: '该项目已处理' }, 409);
+    const r = await db.select({ id: projects.id, name: projects.name, status: projects.status, owner_id: projects.owner_id })
+      .from(projects).where(eq(projects.id, id));
+    if (!r.length) return D({ error: 'not found' }, 404);
+    if (r[0].status !== 'pending') return D({ error: '该项目已处理' }, 409);
 
     // 同一条规则(见 users.ts 的用户审核 与 join-requests 的 /decision):
     // decision 只能是 approve/reject,其它值一律 400,不能默认落到 rejected——
@@ -408,15 +438,15 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
     const status = body.decision === 'approve' ? 'approved'
                  : body.decision === 'reject' ? 'rejected' : null;
     if (!status) return D({ error: '决定只能是 approve 或 reject' }, 400);
-    await query(
-      `UPDATE projects SET status=$1, review_note=$2, reviewed_by=$3, reviewed_at=now(), updated_at=now()
-        WHERE id=$4`,
-      [status, String(body.note || '').slice(0, 300), ctx.user!.id, id]);
-    await notify((r.rows[0] as any).owner_id, 'project',
+    await db.update(projects).set({
+      status, review_note: String(body.note || '').slice(0, 300),
+      reviewed_by: ctx.user!.id, reviewed_at: sql`now()`, updated_at: sql`now()`,
+    }).where(eq(projects.id, id));
+    await notify(r[0].owner_id, 'project',
       status === 'approved' ? '项目已上线' : '项目未通过',
-      status === 'approved' ? `你发起的「${(r.rows[0] as any).name}」已通过审核。`
-                            : `「${(r.rows[0] as any).name}」这次未通过,可补充后重新提交。`);
-    return D({ ok: true, status, name: (r.rows[0] as any).name });
+      status === 'approved' ? `你发起的「${r[0].name}」已通过审核。`
+                            : `「${r[0].name}」这次未通过,可补充后重新提交。`);
+    return D({ ok: true, status, name: r[0].name });
   }
 };
 

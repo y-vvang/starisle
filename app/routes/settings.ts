@@ -1,9 +1,11 @@
-import { query } from '../db/pool';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/pool';
+import { settings } from '../db/schema';
 import type { RouteHandler } from './types';
 
 export async function getSetting(key: string, fallback: unknown) {
-  const r = await query('SELECT value FROM settings WHERE key=$1', [key]);
-  return r.rowCount ? (r.rows[0] as any).value : fallback;
+  const r = await db.select().from(settings).where(eq(settings.key, key));
+  return r.length ? r[0].value : fallback;
 }
 
 const settingsRoutes: RouteHandler = async (ctx, D) => {
@@ -15,11 +17,11 @@ const settingsRoutes: RouteHandler = async (ctx, D) => {
 
   if (method === 'PATCH' && path === '/api/admin/settings') {
     if (typeof ctx.body.registration_open === 'boolean') {
-      await query(
-        `INSERT INTO settings (key, value) VALUES ('registration_open', $1::jsonb)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-        [JSON.stringify(ctx.body.registration_open)]
-      );
+      // jsonb 列在 builder 路径直接收 JS 值(drizzle 内部序列化),
+      // 不再手工 JSON.stringify(那是裸 pg 路径的要求)。
+      await db.insert(settings)
+        .values({ key: 'registration_open', value: ctx.body.registration_open })
+        .onConflictDoUpdate({ target: settings.key, set: { value: ctx.body.registration_open } });
     }
     return D({ ok: true, registration_open: await getSetting('registration_open', true) });
   }
