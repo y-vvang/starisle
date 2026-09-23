@@ -2,15 +2,23 @@
   "name": "starisle",
   "version": "1.0.0",
   "private": true,
-  "description": "星屿 Starisle · Node + PostgreSQL 全栈项目协作社区(真实账号,Docker Compose 部署)",
+  "type": "module",
+  "description": "星屿 Starisle · Bun + TypeScript + PostgreSQL 全栈项目协作社区(真实账号,Docker Compose 部署)",
   "scripts": {
-    "start": "node --env-file=.env app/server.js",
+    "start": "bun app/server.ts",
     "db:up": "docker compose up -d db",
-    "migrate": "node --env-file=.env app/db/migrate.js",
-    "create-admin": "node --env-file=.env app/bin/create-admin.js",
-    "test": "node --env-file-if-exists=.env --test --test-concurrency=1"
+    "migrate": "bun app/db/migrate.ts",
+    "create-admin": "bun app/bin/create-admin.ts",
+    "seed": "bun app/bin/import-seed.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0",
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.5.0"
   }
 }

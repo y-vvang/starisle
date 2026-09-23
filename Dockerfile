@@ -1,26 +1,27 @@
-FROM node:24-alpine AS fe
+FROM oven/bun:1 AS fe
 WORKDIR /fe
-COPY app/frontend/package*.json ./
-RUN npm ci
+# glob 拷不到 bun.lock,必须显式列出(bun install --frozen-lockfile 找不到锁文件会直接失败)
+COPY app/frontend/package.json app/frontend/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY app/frontend/ ./
-RUN npm run build
+RUN bun run build
 
-FROM node:24-alpine
+FROM oven/bun:1
 WORKDIR /srv/starisle
 
 # 生产依赖(仅 pg)
-COPY package*.json ./
-RUN npm ci --omit=dev
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --prod
 
-# 零依赖后端
+# 零 HTTP 框架后端(Bun + TS)
 COPY app/ app/
 
-# 镜像内构建的前端产物(vite outDir 相对 vite.config.js 解析,
+# 镜像内构建的前端产物(vite outDir 相对 vite.config 解析,
 # 在 fe 阶段落在容器根下的 /public-dist,而非 /fe/public-dist)
 COPY --from=fe /public-dist app/public-dist
 
 ENV PORT=4870
 EXPOSE 4870
 
-USER node
-CMD ["sh", "-c", "node app/db/migrate.js && node app/server.js"]
+USER bun
+CMD ["sh", "-c", "bun app/db/migrate.ts && bun app/server.ts"]

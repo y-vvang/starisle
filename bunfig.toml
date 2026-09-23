@@ -1,0 +1,10 @@
+# bun test 的全局配置。
+#
+# 【为什么需要这个 preload】测试库的选择逻辑在 test/helpers/db.ts:它要在
+# app/db/pool.ts 求值之前把 DATABASE_URL 覆写成 TEST_DATABASE_URL。CJS 时代
+# 靠「先赋值再 require」的顺序保证;ESM 的静态 import 会被提升,模块体里的
+# 赋值反而晚于被 import 模块的求值。bunfig 的 preload 在**任何**测试模块
+# 加载之前执行 test/helpers/env.ts,这是第一道保险;helpers/db.ts 里
+# `import './env'` 排在第一条是第二道。
+[test]
+preload = ["./test/helpers/env.ts"]
