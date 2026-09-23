@@ -1,0 +1,266 @@
+[
+  {
+    "name": "北京市第一〇一中学",
+    "category": "中学",
+    "website": "https://www.beijing101.com/school/index.do?schoolId=587bb213-aab9-415d-b129-b629de3718e8",
+    "cooperation": null,
+    "monogram": "一〇一",
+    "sort": 0
+  },
+  {
+    "name": "北京市八一学校",
+    "category": "中学",
+    "website": "https://byxx.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "八一",
+    "sort": 1
+  },
+  {
+    "name": "北京大学附属中学",
+    "category": "中学",
+    "website": "https://www.pkuschool.edu.cn/",
+    "cooperation": null,
+    "monogram": "北大附",
+    "sort": 2
+  },
+  {
+    "name": "北大附中朝阳未来学校",
+    "category": "中学",
+    "website": "http://fs.pkuschool.edu.cn/",
+    "cooperation": null,
+    "monogram": "未来",
+    "sort": 3
+  },
+  {
+    "name": "北京二十中学",
+    "category": "中学",
+    "website": "https://deszx.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "二十",
+    "sort": 4
+  },
+  {
+    "name": "北京市第八中学",
+    "category": "中学",
+    "website": "https://www.no8ms.bj.cn/cms/home/",
+    "cooperation": null,
+    "monogram": "八中",
+    "sort": 5
+  },
+  {
+    "name": "海淀教师进修附属实验学校",
+    "category": "中学",
+    "website": "https://jxsyxx.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "海实",
+    "sort": 6
+  },
+  {
+    "name": "北京理工大学附属中学",
+    "category": "中学",
+    "website": "https://lgfz.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "理工附",
+    "sort": 7
+  },
+  {
+    "name": "清华大学附属中学",
+    "category": "中学",
+    "website": "https://qhfz.edu.cn/",
+    "cooperation": null,
+    "monogram": "清华附",
+    "sort": 8
+  },
+  {
+    "name": "中国人民大学附属中学",
+    "category": "中学",
+    "website": "https://www.rdfz.cn/",
+    "cooperation": null,
+    "monogram": "人大附",
+    "sort": 9
+  },
+  {
+    "name": "中国人民大学附属中学航天城学校",
+    "category": "中学",
+    "website": "https://rdfzhtcxx.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "航天城",
+    "sort": 10
+  },
+  {
+    "name": "北京市十一学校",
+    "category": "中学",
+    "website": "https://www.bnds.cn/",
+    "cooperation": null,
+    "monogram": "十一",
+    "sort": 11
+  },
+  {
+    "name": "北京市育英学校",
+    "category": "中学",
+    "website": "https://bjsyyxx.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "育英",
+    "sort": 12
+  },
+  {
+    "name": "北京航空航天大学实验学校",
+    "category": "中学",
+    "website": "https://bhsy.buaa.edu.cn/",
+    "cooperation": null,
+    "monogram": "航实",
+    "sort": 13
+  },
+  {
+    "name": "北京市第八十中学",
+    "category": "中学",
+    "website": "http://www.bj80.com",
+    "cooperation": null,
+    "monogram": "八十中",
+    "sort": 14
+  },
+  {
+    "name": "北京交通大学附属中学",
+    "category": "中学",
+    "website": "https://jdfz.bjhdedu.cn/",
+    "cooperation": null,
+    "monogram": "交大附",
+    "sort": 15
+  },
+  {
+    "name": "北京师范大学附属中学",
+    "category": "中学",
+    "website": "https://www.bjsdfz.com/",
+    "cooperation": null,
+    "monogram": "师大附",
+    "sort": 16
+  },
+  {
+    "name": "北京昌平二中",
+    "category": "中学",
+    "website": "https://www.bjcpez.com.cn/",
+    "cooperation": null,
+    "monogram": "昌平二",
+    "sort": 17
+  },
+  {
+    "name": "北京第四中学",
+    "category": "中学",
+    "website": "https://bhsf.lezhiyun.com/cms/bjsz/index.htm",
+    "cooperation": null,
+    "monogram": "四中",
+    "sort": 18
+  },
+  {
+    "name": "北京第五中学",
+    "category": "中学",
+    "website": null,
+    "cooperation": null,
+    "monogram": "五中",
+    "sort": 19
+  },
+  {
+    "name": "北京中学",
+    "category": "中学",
+    "website": "https://www.beijingacademy.com.cn/",
+    "cooperation": null,
+    "monogram": "北中",
+    "sort": 20
+  },
+  {
+    "name": "北京市中关村中学",
+    "category": "中学",
+    "website": "https://zgczx.bjhdedu.cn/index.shtml",
+    "cooperation": null,
+    "monogram": "中关村",
+    "sort": 21
+  },
+  {
+    "name": "首都师范大学附属中学",
+    "category": "中学",
+    "website": "https://www.cnuhs.cn/",
+    "cooperation": null,
+    "monogram": "首师附",
+    "sort": 22
+  },
+  {
+    "name": "北京市顺义牛栏山第一中学",
+    "category": "中学",
+    "website": "http://www.nlsyz.com.cn/",
+    "cooperation": null,
+    "monogram": "牛栏山",
+    "sort": 23
+  },
+  {
+    "name": "北京市第二中学",
+    "category": "中学",
+    "website": null,
+    "cooperation": null,
+    "monogram": "二中",
+    "sort": 24
+  },
+  {
+    "name": "北京景山学校",
+    "category": "中学",
+    "website": null,
+    "cooperation": null,
+    "monogram": "景山",
+    "sort": 25
+  },
+  {
+    "name": "北京景山学校远洋分校",
+    "category": "中学",
+    "website": null,
+    "cooperation": null,
+    "monogram": "远洋",
+    "sort": 26
+  },
+  {
+    "name": "北京日坛中学",
+    "category": "中学",
+    "website": "http://rtzx.bjchyedu.cn/",
+    "cooperation": null,
+    "monogram": "日坛",
+    "sort": 27
+  },
+  {
+    "name": "北京明诚外国语学校",
+    "category": "中学",
+    "website": "https://bjbmca.com/",
+    "cooperation": null,
+    "monogram": "明诚",
+    "sort": 28
+  },
+  {
+    "name": "北京大兴精华学校",
+    "category": "中学",
+    "website": null,
+    "cooperation": null,
+    "monogram": "精华",
+    "sort": 29
+  },
+  {
+    "name": "北京市通州区潞河中学",
+    "category": "中学",
+    "website": "https://www.luhe.cn/",
+    "cooperation": null,
+    "monogram": "潞河",
+    "sort": 30
+  },
+  {
+    "name": "北京市正泽学校",
+    "category": "中学",
+    "website": "http://www.bjzzschool.com/",
+    "cooperation": null,
+    "monogram": "正泽",
+    "sort": 31
+  },
+  {
+    "name": "清华大学附属中学永丰学校",
+    "category": "中学",
+    "website": "https://www.qhfzyf.cn/cms/",
+    "cooperation": null,
+    "monogram": "永丰",
+    "sort": 32
+  }
+]

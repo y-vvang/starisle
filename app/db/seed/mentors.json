@@ -1,0 +1,248 @@
+[
+  {
+    "name": "徐岩",
+    "title": "课程导师",
+    "bio": "开设人工智能通识课程。",
+    "contact_email": "xu.yan@example.invalid",
+    "sort": 0,
+    "courses": [
+      {
+        "title": "人工智能通识",
+        "total_hours": 12,
+        "level": "初级"
+      }
+    ]
+  },
+  {
+    "name": "杨杰",
+    "title": "课程导师",
+    "bio": "开设人工智能通识课程。",
+    "contact_email": "yang.jie@example.invalid",
+    "sort": 1,
+    "courses": [
+      {
+        "title": "人工智能通识",
+        "total_hours": 12,
+        "level": "初级"
+      }
+    ]
+  },
+  {
+    "name": "梁霄",
+    "title": "课程导师",
+    "bio": "开设人工智能通识课程。",
+    "contact_email": "liang.xiao@example.invalid",
+    "sort": 2,
+    "courses": [
+      {
+        "title": "人工智能通识",
+        "total_hours": 12,
+        "level": "初级"
+      }
+    ]
+  },
+  {
+    "name": "张雨桐",
+    "title": "课程导师",
+    "bio": "开设线代、微积分与信息论课程。",
+    "contact_email": "zhang.yutong@example.invalid",
+    "sort": 3,
+    "courses": [
+      {
+        "title": "线代",
+        "total_hours": 24,
+        "level": "初级"
+      },
+      {
+        "title": "微积分",
+        "total_hours": 18,
+        "level": "初级"
+      },
+      {
+        "title": "信息论",
+        "total_hours": 12,
+        "level": "中级"
+      }
+    ]
+  },
+  {
+    "name": "谢广增",
+    "title": "课程导师",
+    "bio": "开设微积分与概率论课程。",
+    "contact_email": "xie.guangzeng@example.invalid",
+    "sort": 4,
+    "courses": [
+      {
+        "title": "微积分",
+        "total_hours": 18,
+        "level": "初级"
+      },
+      {
+        "title": "概率论",
+        "total_hours": 18,
+        "level": "中级"
+      }
+    ]
+  },
+  {
+    "name": "王恒亮",
+    "title": "课程导师",
+    "bio": "开设概率论与信号和数据处理课程。",
+    "contact_email": "wang.hengliang@example.invalid",
+    "sort": 5,
+    "courses": [
+      {
+        "title": "概率论",
+        "total_hours": 18,
+        "level": "中级"
+      },
+      {
+        "title": "信号与数据处理",
+        "total_hours": 12,
+        "level": "中级"
+      }
+    ]
+  },
+  {
+    "name": "王秋然",
+    "title": "课程导师",
+    "bio": "开设信息论与人工智能学科拓展课程。",
+    "contact_email": "wang.qiuran@example.invalid",
+    "sort": 6,
+    "courses": [
+      {
+        "title": "信息论",
+        "total_hours": 12,
+        "level": "中级"
+      },
+      {
+        "title": "人工智能学科拓展（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "陶大江",
+    "title": "课程导师",
+    "bio": "开设信号与数据处理课程。",
+    "contact_email": "tao.dajiang@example.invalid",
+    "sort": 7,
+    "courses": [
+      {
+        "title": "信号与数据处理",
+        "total_hours": 12,
+        "level": "中级"
+      }
+    ]
+  },
+  {
+    "name": "贾媛媛",
+    "title": "课程导师",
+    "bio": "开设人工智能学科拓展课程。",
+    "contact_email": "jia.yuanyuan@example.invalid",
+    "sort": 8,
+    "courses": [
+      {
+        "title": "人工智能学科拓展（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "马驰川",
+    "title": "课程导师",
+    "bio": "开设人工智能学科拓展课程。",
+    "contact_email": "ma.chichuan@example.invalid",
+    "sort": 9,
+    "courses": [
+      {
+        "title": "人工智能学科拓展（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "肖然",
+    "title": "课程导师",
+    "bio": "开设人工智能学科拓展课程。",
+    "contact_email": "xiao.ran@example.invalid",
+    "sort": 10,
+    "courses": [
+      {
+        "title": "人工智能学科拓展（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "胡万松",
+    "title": "课程导师",
+    "bio": "开设 AI 编程与应用、算法应用和硬件应用课程。",
+    "contact_email": "hu.wansong@example.invalid",
+    "sort": 11,
+    "courses": [
+      {
+        "title": "AI编程与应用（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      },
+      {
+        "title": "算法应用",
+        "total_hours": null,
+        "level": "高级"
+      },
+      {
+        "title": "硬件应用",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "庞卉淼",
+    "title": "课程导师",
+    "bio": "开设 AI 编程与应用、算法应用和硬件应用课程。",
+    "contact_email": "pang.huimiao@example.invalid",
+    "sort": 12,
+    "courses": [
+      {
+        "title": "AI编程与应用（不设限）",
+        "total_hours": null,
+        "level": "高级"
+      },
+      {
+        "title": "算法应用",
+        "total_hours": null,
+        "level": "高级"
+      },
+      {
+        "title": "硬件应用",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  },
+  {
+    "name": "郑子杰",
+    "title": "课程导师",
+    "bio": "开设 AI4S 与算法应用课程。",
+    "contact_email": "zheng.zijie@example.invalid",
+    "sort": 13,
+    "courses": [
+      {
+        "title": "AI4S",
+        "total_hours": null,
+        "level": "高级"
+      },
+      {
+        "title": "算法应用",
+        "total_hours": null,
+        "level": "高级"
+      }
+    ]
+  }
+]

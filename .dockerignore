@@ -1,0 +1,8 @@
+node_modules
+docs
+*.zip
+*.pdf
+deploy
+Dockerfile
+docker-compose.yml
+.claude

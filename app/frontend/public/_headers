@@ -1,0 +1,8 @@
+# HTML shells must never be cached stale — they reference content-hashed
+# assets, so always re-fetch the shell to pick up the latest bundle.
+/
+  Cache-Control: no-store
+/index.html
+  Cache-Control: no-store
+/admin.html
+  Cache-Control: no-store

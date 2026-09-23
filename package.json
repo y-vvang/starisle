@@ -1,0 +1,16 @@
+{
+  "name": "starisle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "星屿 Starisle · Node + PostgreSQL 全栈项目协作社区(真实账号,Docker Compose 部署)",
+  "scripts": {
+    "start": "node --env-file=.env app/server.js",
+    "db:up": "docker compose up -d db",
+    "migrate": "node --env-file=.env app/db/migrate.js",
+    "create-admin": "node --env-file=.env app/bin/create-admin.js",
+    "test": "node --env-file-if-exists=.env --test --test-concurrency=1"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="星屿 Starisle · AI Youth Galaxy — 一个有准入门槛、以真实作品为货币的国际青少年 AI 开发者社区" />
+  <title>星屿 · Starisle</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="/fonts/outfit-var.woff2" as="font" type="font/woff2" crossorigin />
+  <style>
+    /* 启动画面:Vue 挂载后自动被替换 */
+    html, body { margin: 0; background: #f4f6fb; }
+    .boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+    .boot svg { width: 44px; height: 44px; animation: bootPulse 1.6s ease-in-out infinite; filter: drop-shadow(0 0 18px rgba(255,210,125,.8)); }
+    .boot span { color: #8792a6; font: 12px/1 system-ui, sans-serif; letter-spacing: .4em; }
+    @keyframes bootPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.82); opacity: .55; } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="boot">
+      <svg viewBox="0 0 24 24" fill="#ffd27d"><path d="M12 2.2 14.3 9.7 21.8 12 14.3 14.3 12 21.8 9.7 14.3 2.2 12 9.7 9.7Z"/></svg>
+      <span>STARISLE · YOUTH GALAXY</span>
+    </div>
+  </div>
+  <script type="module" src="/src/portal/main.js"></script>
+</body>
+</html>

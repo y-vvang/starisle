@@ -1,0 +1,36 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PORT:-4870}
+      SESSION_SECURE: ${SESSION_SECURE:-0}
+    ports:
+      - "4930:${PORT:-4870}"
+
+  db:
+    image: postgres:17-alpine
+    container_name: starisle-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: starisle
+      POSTGRES_USER: starisle
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U starisle -d starisle"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>星屿 Starisle</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --surface: #ffffff;
+    --surface-2: #f2f5fb;
+    --line: rgba(24, 42, 82, .12);
+    --line-strong: rgba(24, 42, 82, .22);
+    --ink: #17223c;
+    --ink-2: #47546e;
+    --ink-3: #8792a6;
+    --polaris: #c2891b;
+    --astral: #2f6fd0;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: #dc2626;
+    --radius: 14px;
+    --radius-lg: 20px;
+    --font: "Outfit", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--font);
+    background:
+      radial-gradient(900px 500px at 85% -5%, rgba(47,111,208,.06), transparent 70%),
+      radial-gradient(800px 600px at -5% 105%, rgba(194,137,27,.05), transparent 70%),
+      var(--bg);
+    background-attachment: fixed;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.6;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--astral); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+  .hidden { display: none !important; }
+
+  /* ---------- header ---------- */
+  .site-header {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(244, 246, 251, .86);
+    backdrop-filter: blur(14px) saturate(160%);
+    border-bottom: 1px solid var(--line);
+  }
+  .header-inner { height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+  .logo { display: flex; align-items: baseline; gap: 8px; font-weight: 700; font-size: 19px; letter-spacing: .02em; color: var(--ink); }
+  .logo .mark { color: var(--polaris); font-size: 18px; text-shadow: 0 0 10px rgba(194,137,27,.35); }
+  .logo .en { font-weight: 400; color: var(--ink-3); font-size: 12.5px; letter-spacing: .16em; text-transform: uppercase; }
+  #whoami { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--ink-2); }
+  #whoami b { color: var(--astral); font-weight: 600; }
+
+  /* ---------- hero ---------- */
+  .hero-band { padding: 44px 0 8px; }
+  .hero-band .tagline { font-size: 26px; font-weight: 600; color: var(--ink); letter-spacing: .01em; max-width: 640px; }
+  .hero-band .sub { color: var(--ink-2); margin-top: 8px; font-size: 15px; }
+
+  #globalMsg:empty { margin: 0; }
+  #globalMsg { margin: 18px 0 0; }
+
+  /* ---------- stats ---------- */
+  .stats-row { display: flex; gap: 16px; margin: 28px 0 8px; flex-wrap: wrap; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 30px; box-shadow: 0 1px 2px rgba(24,42,82,.04), 0 10px 28px rgba(24,42,82,.05);
+    display: flex; flex-direction: column; gap: 2px; min-width: 140px;
+  }
+  .stat b { font-size: 34px; font-weight: 800; color: var(--astral); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 13px; color: var(--ink-3); letter-spacing: .04em; }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 52px; }
+  h2 { font-size: 24px; font-weight: 700; letter-spacing: .01em; margin: 0 0 4px; }
+  h3 { font-size: 16px; font-weight: 700; color: var(--ink-2); margin: 0 0 10px; letter-spacing: .02em; }
+  .section-sub { color: var(--ink-3); font-size: 13.5px; margin: 0 0 18px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 22px 24px; box-shadow: 0 1px 2px rgba(24,42,82,.04), 0 10px 28px rgba(24,42,82,.05);
+  }
+  .table-card { padding: 6px 24px; margin-top: 16px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 14px 12px; border-bottom: 1px solid var(--line); font-size: 14.5px; vertical-align: top; }
+  th { color: var(--ink-3); font-weight: 600; font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--surface-2); }
+  td b { color: var(--ink); font-weight: 600; }
+
+  .tag { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: #fff; letter-spacing: .02em; }
+
+  /* ---------- forms ---------- */
+  .auth-row { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 52px; }
+  .auth-row .col { flex: 1; min-width: 320px; }
+  .auth-row .col h2 { font-size: 22px; }
+
+  label { font-size: 13.5px; color: var(--ink-2); font-weight: 600; display: block; margin-bottom: 6px; letter-spacing: .01em; }
+  input, textarea, select {
+    width: 100%; padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: 10px;
+    font-size: 15px; font-family: inherit; margin-bottom: 6px; background: var(--surface-2); color: var(--ink);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none; border-color: var(--astral); box-shadow: 0 0 0 3px rgba(47,111,208,.14); background: var(--surface);
+  }
+  .field-hint { color: var(--ink-3); font-size: 12.5px; margin: 0 0 14px; line-height: 1.5; }
+  form > label:not(:first-child) { margin-top: 4px; }
+
+  /* ---------- buttons ---------- */
+  button {
+    font-family: inherit; cursor: pointer; border: none; border-radius: 999px;
+    font-size: 15px; font-weight: 600; padding: 11px 26px; letter-spacing: .02em;
+    transition: transform .12s, box-shadow .15s, background .15s;
+  }
+  button[type="submit"], button.primary {
+    background: linear-gradient(135deg, #e0ac48, #c2891b); color: #2a1c02;
+    box-shadow: 0 6px 18px rgba(194,137,27,.28);
+  }
+  button[type="submit"]:hover, button.primary:hover { box-shadow: 0 8px 22px rgba(194,137,27,.4); transform: translateY(-1px); }
+  button.ghost { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line-strong); padding: 8px 18px; font-size: 13.5px; }
+  button.ghost:hover { background: var(--surface); border-color: var(--astral); color: var(--ink); }
+  button.reject { background: #fdecea; color: var(--bad); box-shadow: none; border: 1px solid rgba(220,38,38,.25); }
+  button.reject:hover { background: #fbdcd9; }
+  .pending-item .btns button:not(.reject) { background: linear-gradient(135deg, #34a15c, var(--ok)); color: #fff; box-shadow: 0 4px 14px rgba(22,163,74,.25); }
+
+  /* ---------- messages ---------- */
+  .msg { padding: 12px 16px; border-radius: 10px; margin-bottom: 14px; font-size: 14.5px; line-height: 1.5; }
+  .msg.ok { background: #e9f7ee; color: #15803d; border: 1px solid rgba(22,163,74,.25); }
+  .msg.err { background: #fdecea; color: #b91c1c; border: 1px solid rgba(220,38,38,.22); }
+  .msg.info { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line-strong); }
+
+  /* ---------- member-only / admin ---------- */
+  #memberSection .card { border-color: var(--line-strong); }
+
+  .admin-surface {
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-lg);
+    padding: 30px 32px 34px;
+    margin-top: 60px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.6);
+  }
+  .admin-surface h2::before { content: '\1F510  '; }
+  .admin-grid { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; }
+  .admin-grid > div { flex: 1; min-width: 320px; }
+  .admin-grid .card { background: var(--surface); }
+
+  .pending-item { border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; background: var(--surface-2); }
+  .pending-item:last-child { margin-bottom: 0; }
+  .pending-item b { font-size: 15.5px; }
+  .pending-item .fields { font-size: 13.5px; color: var(--ink-2); margin: 8px 0; line-height: 1.7; }
+  .pending-item .btns { display: flex; gap: 10px; margin-top: 10px; }
+  .empty-note { color: var(--ink-3); font-size: 14px; padding: 8px 2px; }
+
+  /* ---------- footer ---------- */
+  .site-footer { margin-top: 70px; border-top: 1px solid var(--line); padding: 26px 0 60px; color: var(--ink-3); font-size: 13px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 0 18px; }
+    .hero-band .tagline { font-size: 21px; }
+    table, thead, tbody, th, td, tr { display: block; }
+    thead { display: none; }
+    tbody tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
+    td { border-bottom: none; padding: 4px 0; }
+  }
+.who-banner{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fdf6e3;border:1px solid #e8d9a8;color:#7a5c14;font-size:14px;font-weight:600}
+.who-banner b{color:#a8791a}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <div class="logo"><span class="mark">&#10022;</span>星屿 <span class="en">Starisle</span></div>
+    <div id="whoami"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero-band">
+    <div class="tagline">和优秀的同龄人，一起做真实项目</div>
+  </div>
+
+  <div id="globalMsg"></div>
+
+  <div class="stats-row">
+    <div class="stat"><b id="statMembers">-</b><span>社区成员</span></div>
+    <div class="stat"><b id="statProjects">-</b><span>正在进行的项目</span></div>
+  </div>
+
+  <section id="projectsSection">
+    <h2>正在进行的项目</h2>
+    <div class="card table-card">
+      <table id="projTable"><thead><tr><th>项目</th><th>简介</th><th>领域</th><th>发起人</th><th>仓库</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section>
+    <h2>社区成员</h2>
+    <div class="card table-card">
+      <table id="memberTable"><thead><tr><th>用户名</th><th>显示名</th><th>简介</th><th>仓库</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <div class="auth-row">
+    <div class="col">
+      <h2>申请加入</h2>
+      <div class="card">
+        <div id="regMsg"></div>
+        <form id="regForm">
+          <label>用户名</label>
+          <input name="username" required>
+          <div class="field-hint">只能用小写字母、数字、下划线、连字符。</div>
+          <label>密码</label><input name="password" type="password" required>
+          <label>显示名</label>
+          <input name="display_name" required>
+          <div class="field-hint">用户名用于登录和主页地址，不可更改；显示名是别人看到的名字，随时可改。</div>
+          <label>邮箱</label><input name="email" type="email" required>
+          <label>仓库链接</label><input name="repo_url" placeholder="https://github.com/xxx/xxx">
+          <label>申请说明（至少 10 字）</label><textarea name="apply_note" rows="2" required></textarea>
+          <button type="submit">提交申请</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="col">
+      <h2>登录</h2>
+      <div class="card">
+        <div id="loginMsg"></div>
+        <form id="loginForm">
+          <label>用户名</label><input name="username" required>
+          <label>密码</label><input name="password" type="password" required>
+          <button type="submit">登录</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <section id="memberSection" class="hidden">
+    <h2>发布项目</h2>
+    <div class="card">
+      <div class="msg info">项目提交后需站长审核通过才会公开显示。</div>
+      <div id="projMsg"></div>
+      <div id="projWho" class="who-banner"></div>
+<form id="projForm">
+        <label>项目名称</label><input name="name" required>
+        <label>一句话简介</label><input name="tagline" required>
+        <label>详细描述</label><textarea name="description" rows="3"></textarea>
+        <label>仓库链接</label><input name="repo_url">
+        <label>领域</label>
+        <select name="domain_id" id="domainSelect"></select>
+        <button type="submit">提交项目</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="adminSection" class="hidden admin-surface">
+    <h2>待审核</h2>
+    <div class="section-sub">管理员工作区 · 通过的申请与项目会立即公开显示</div>
+    <div class="admin-grid">
+      <div>
+        <h3>待审核用户</h3>
+        <div class="card" id="pendingUsers"></div>
+      </div>
+      <div>
+        <h3>待审核项目</h3>
+        <div class="card" id="pendingProjects"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">星屿 Starisle · 和优秀的同龄人，一起做真实项目</div>
+</footer>
+
+<script>
+const API = '';
+let ME = null;
+let DOMAINS = [];
+
+function esc(s){ return (s ?? '').toString().replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(el, text, type){ el.innerHTML = text ? `<div class="msg ${type}">${esc(text)}</div>` : ''; }
+
+async function api(path, opts) {
+  const res = await fetch(API + path, Object.assign({ credentials: 'same-origin', headers: { 'Content-Type': 'application/json' } }, opts));
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  return { ok: res.ok, status: res.status, body };
+}
+
+async function loadStats() {
+  const { body } = await api('/api/stats');
+  if (body) {
+    document.getElementById('statMembers').textContent = body.members ?? '-';
+    document.getElementById('statProjects').textContent = body.projects ?? '-';
+  }
+}
+
+async function loadDomains() {
+  const { body } = await api('/api/domains');
+  DOMAINS = (body && body.domains) || [];
+  const sel = document.getElementById('domainSelect');
+  sel.innerHTML = DOMAINS.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
+}
+
+function domainInfo(id) {
+  return DOMAINS.find(d => d.id === id) || { name: id || '未分类', color: '#888' };
+}
+
+async function loadProjects() {
+  const { body } = await api('/api/projects');
+  const rows = (body && body.projects) || [];
+  const tbody = document.querySelector('#projTable tbody');
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-note">暂无已公开项目</td></tr>'; return; }
+  tbody.innerHTML = rows.map(p => {
+    const d = domainInfo(p.domain_id);
+    return `<tr>
+      <td><b>${esc(p.name)}</b></td>
+      <td>${esc(p.tagline || '')}</td>
+      <td><span class="tag" style="background:${esc(d.color)}">${esc(d.name)}</span></td>
+      <td>${esc(p.owner ? (p.owner.display_name || p.owner.username) : '-')}</td>
+      <td>${p.repo_url ? `<a href="${esc(p.repo_url)}" target="_blank" rel="noopener">仓库</a>` : '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadMembers() {
+  const { body } = await api('/api/members');
+  const rows = (body && body.members) || [];
+  const tbody = document.querySelector('#memberTable tbody');
+  if (!rows.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty-note">暂无成员</td></tr>'; return; }
+  tbody.innerHTML = rows.map(m => `<tr>
+    <td>${esc(m.username)}</td>
+    <td>${esc(m.display_name || '')}</td>
+    <td>${esc(m.bio || '-')}</td>
+    <td>${m.repo_url ? `<a href="${esc(m.repo_url)}" target="_blank" rel="noopener">仓库</a>` : '-'}</td>
+  </tr>`).join('');
+}
+
+function renderWhoami() {
+  const el = document.getElementById('whoami');
+  const w = document.getElementById('projWho');
+  if (w) {
+    w.innerHTML = ME
+      ? `发起人会记成你现在登录的这个账号：<b>${esc(ME.display_name || ME.username)}</b>（${esc(ME.username)}）`
+      : '';
+  }
+  if (!ME) { el.innerHTML = ''; return; }
+  el.innerHTML = `<span>当前登录：<b>${esc(ME.display_name || ME.username)}</b>（${esc(ME.role)}）</span><button class="ghost" id="logoutBtn">退出登录</button>`;
+  document.getElementById('logoutBtn').onclick = doLogout;
+}
+
+async function refreshMe() {
+  const { body } = await api('/api/auth/me');
+  ME = (body && body.user) || null;
+  renderWhoami();
+  document.getElementById('memberSection').classList.toggle('hidden', !ME);
+  document.getElementById('adminSection').classList.toggle('hidden', !(ME && ME.role === 'admin'));
+  if (ME && ME.role === 'admin') { loadPendingUsers(); loadPendingProjects(); }
+}
+
+async function doLogout() {
+  await api('/api/auth/logout', { method: 'POST' });
+  await refreshMe();
+  showMsg(document.getElementById('globalMsg'), '已退出登录', 'info');
+}
+
+document.getElementById('regForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const payload = Object.fromEntries(f.entries());
+  const { ok, body } = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) });
+  const el = document.getElementById('regMsg');
+  if (ok) { showMsg(el, (body && body.note) || '注册成功,等待站长审核', 'ok'); e.target.reset(); }
+  else { showMsg(el, (body && body.error) || '注册失败', 'err'); }
+});
+
+document.getElementById('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const payload = Object.fromEntries(f.entries());
+  const { ok, status, body } = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) });
+  const el = document.getElementById('loginMsg');
+  if (ok) {
+    showMsg(el, '登录成功', 'ok');
+    e.target.reset();
+    await refreshMe();
+  } else if (status === 403) {
+    showMsg(el, (body && body.error) || '账号尚未通过审核', 'info');
+  } else {
+    showMsg(el, (body && body.error) || '登录失败', 'err');
+  }
+});
+
+document.getElementById('projForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const payload = Object.fromEntries(f.entries());
+  const { ok, body } = await api('/api/projects', { method: 'POST', body: JSON.stringify(payload) });
+  const el = document.getElementById('projMsg');
+  if (ok) { showMsg(el, '项目已提交,等待站长审核通过后公开显示', 'ok'); e.target.reset(); }
+  else { showMsg(el, (body && body.error) || '提交失败', 'err'); }
+});
+
+async function loadPendingUsers() {
+  const { body } = await api('/api/admin/users/pending');
+  const rows = (body && body.users) || [];
+  const el = document.getElementById('pendingUsers');
+  if (!rows.length) { el.innerHTML = '<div class="empty-note">暂无待审核用户</div>'; return; }
+  el.innerHTML = rows.map(u => `
+    <div class="pending-item">
+      <b>${esc(u.display_name || u.username)}</b>（${esc(u.username)}）
+      <div class="fields">
+        邮箱:${esc(u.email || '-')}<br>
+        仓库:${u.repo_url ? `<a href="${esc(u.repo_url)}" target="_blank" rel="noopener">${esc(u.repo_url)}</a>` : '-'}<br>
+        申请说明:${esc(u.apply_note || '-')}
+      </div>
+      <div class="btns">
+        <button data-id="${esc(u.id)}" data-decision="approve" class="userReviewBtn">通过</button>
+        <button data-id="${esc(u.id)}" data-decision="reject" class="userReviewBtn reject">拒绝</button>
+      </div>
+    </div>`).join('');
+  el.querySelectorAll('.userReviewBtn').forEach(btn => {
+    btn.onclick = async () => {
+      await api(`/api/admin/users/${btn.dataset.id}/review`, { method: 'POST', body: JSON.stringify({ decision: btn.dataset.decision }) });
+      loadPendingUsers();
+      loadStats(); loadMembers();
+    };
+  });
+}
+
+async function loadPendingProjects() {
+  const { body } = await api('/api/admin/projects/pending');
+  const rows = (body && body.projects) || [];
+  const el = document.getElementById('pendingProjects');
+  if (!rows.length) { el.innerHTML = '<div class="empty-note">暂无待审核项目</div>'; return; }
+  el.innerHTML = rows.map(p => `
+    <div class="pending-item">
+      <b>${esc(p.name)}</b>
+      <div class="fields">
+        简介:${esc(p.tagline || '-')}<br>
+        描述:${esc(p.description || '-')}<br>
+        仓库:${p.repo_url ? `<a href="${esc(p.repo_url)}" target="_blank" rel="noopener">${esc(p.repo_url)}</a>` : '-'}<br>
+        发起人:${esc(p.owner ? (p.owner.display_name || p.owner.username) : '-')}
+      </div>
+      <div class="btns">
+        <button data-id="${esc(p.id ?? p.slug)}" data-decision="approve" class="projReviewBtn">通过</button>
+        <button data-id="${esc(p.id ?? p.slug)}" data-decision="reject" class="projReviewBtn reject">拒绝</button>
+      </div>
+    </div>`).join('');
+  el.querySelectorAll('.projReviewBtn').forEach(btn => {
+    btn.onclick = async () => {
+      await api(`/api/admin/projects/${btn.dataset.id}/review`, { method: 'POST', body: JSON.stringify({ decision: btn.dataset.decision }) });
+      loadPendingProjects();
+      loadStats(); loadProjects();
+    };
+  });
+}
+
+(async function init() {
+  await Promise.all([loadStats(), loadDomains(), loadProjects(), loadMembers(), refreshMe()]);
+})();
+</script>
+</body>
+</html>

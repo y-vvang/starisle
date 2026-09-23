@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>星屿控制台 · Starisle</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="/fonts/outfit-var.woff2" as="font" type="font/woff2" crossorigin />
+  <style>
+    html, body { margin: 0; background: #04060f; }
+    .boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+    .boot svg { width: 44px; height: 44px; animation: bootPulse 1.6s ease-in-out infinite; filter: drop-shadow(0 0 18px rgba(255,210,125,.8)); }
+    .boot span { color: #6b7699; font: 12px/1 system-ui, sans-serif; letter-spacing: .4em; }
+    @keyframes bootPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.82); opacity: .55; } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="boot">
+      <svg viewBox="0 0 24 24" fill="#ffd27d"><path d="M12 2.2 14.3 9.7 21.8 12 14.3 14.3 12 21.8 9.7 14.3 2.2 12 9.7 9.7Z"/></svg>
+      <span>STARISLE CONSOLE</span>
+    </div>
+  </div>
+  <script type="module" src="/src/admin/main.js"></script>
+</body>
+</html>
