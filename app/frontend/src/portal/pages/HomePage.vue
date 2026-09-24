@@ -3,40 +3,32 @@ import { computed, onMounted, ref } from 'vue';
 import { store, openProject, openMember, TRACKS } from '../store';
 import { go } from '../../lib/router';
 import { api, ago, STAGE } from '../../lib/api';
+import type { ApiResp } from '../../lib/api';
 import { t } from '../../lib/i18n';
 import Icon from '../../components/Icon.vue';
 import HeroSection from '../sections/HeroSection.vue';
 
-// 首页聚合预览:优先用后台「首页配置」选定的推荐项;未配置则按"最新/最热"规则筛精华
-// (空壳 strip 的数据源是硬编码空值,排序键 activity/favorites 等恒 undefined → 全为 0,
-//  行为等价:切片取前 N。any 是过渡态宽松,清壳时一并移除。)
-const HOT: Record<string, (a: any, b: any) => number> = {
-  projects: (a, b) => (b.activity || 0) - (a.activity || 0),        // 最热:近90天活跃
-  courses: (a, b) => (b.favorites || 0) - (a.favorites || 0),       // 最热:收藏
-  columns: (a, b) => (b.ts || 0) - (a.ts || 0),                     // 最新:发布时间
-  activities: (a, b) => (a.ts || 0) - (b.ts || 0),                  // 最近:临近的活动
-  students: (a, b) => (b.brightness || 0) - (a.brightness || 0),    // 最亮:近期活跃
-  resources: (a, b) => (b.applied || 0) - (a.applied || 0),         // 最热:申请数
-};
-function pick(list: any[], key: string, n: number): any[] {
-  const ids = (store.homeConfig.featured && store.homeConfig.featured[key]) || [];
-  if (ids.length) {
-    const byId = Object.fromEntries(list.map(x => [x.id, x]));
-    const chosen = ids.map(id => byId[id]).filter(Boolean);
-    if (chosen.length) return chosen.slice(0, n);
-  }
-  const s = HOT[key];
-  return (s ? [...list].sort(s) : list).slice(0, n);
-}
-const projects = computed(() => pick(store.projects, 'projects', 4));
-const courses = computed(() => pick(store.courses, 'courses', 4));
-const columns = computed(() => pick(store.highlights.posts || [], 'columns', 3));
-const activities = computed(() => pick(store.gatherings as any[], 'activities', 3));
-const students = computed(() => pick(store.talent as any[], 'students', 4));
-// 资源模块已随前端重写整体下线,新后端没有 /api/resources。这一条不再请求一个
-// 必然 404 的端点,直接留空数组 —— 对应的"资源"strip 会照旧渲染,只是没有卡片。
+// 首页预览条:boot() 不再整份拉 /projects、/members、/courses(那是分页前
+// 的取数方式)。真正接数据的两条(项目/课程)在挂载时自拉 per_page=4 的
+// 第一页;服务端已按 created_at(课程再按 featured)排好序,直接照单渲染。
+const stripProjects = ref<any[]>([]);
+const stripCourses = ref<any[]>([]);
+
+onMounted(async () => {
+  const [pr, cr] = await Promise.all([
+    api('/projects?per_page=4').catch((): ApiResp => ({})),
+    api('/courses?per_page=4').catch((): ApiResp => ({})),
+  ]);
+  stripProjects.value = (pr && pr.projects) || [];
+  stripCourses.value = (cr && cr.courses) || [];
+});
+
+// 仍走旧壳数据源的 strip(专栏/活动/学生/资源):数据源恒空,切片照旧不渲染卡片
+const columns = computed(() => (store.highlights.posts as any[]).slice(0, 3));
+const activities = computed(() => (store.gatherings as any[]).slice(0, 3));
+const students = computed(() => (store.talent as any[]).slice(0, 4));
 const allRes = ref<any[]>([]);
-const resources = computed(() => pick(allRes.value, 'resources', 4));
+const resources = computed(() => allRes.value.slice(0, 4));
 
 // 课程的分类维度是 track(数学基础/通识/学科拓展/编程应用),不再是旧的
 // official/mentor/student —— 那三档在重写里随 kind 字段一起删了。
@@ -55,7 +47,7 @@ const KIND = TRACKS;
           <a class="more" @click="go('projects')">{{ t('查看全部', 'See all') }} <Icon name="arrow" /></a>
         </div>
         <div class="strip-row c4">
-          <a class="mini hoverable" v-for="p in projects" :key="p.id" @click="openProject(p.id)"
+          <a class="mini hoverable" v-for="p in stripProjects" :key="p.id" @click="openProject(p.id)"
             :style="{ '--tc': store.dcolor[p.domain] }" role="button" tabindex="0">
             <span class="mini-dot" :style="{ background: store.dcolor[p.domain] }"></span>
             <div class="mini-title">{{ p.name }}</div>
@@ -74,7 +66,7 @@ const KIND = TRACKS;
           <a class="more" @click="go('courses')">{{ t('查看全部', 'See all') }} <Icon name="arrow" /></a>
         </div>
         <div class="strip-row c4">
-          <a class="mini hoverable" v-for="c in courses" :key="c.id" @click="go('courses')" role="button" tabindex="0">
+          <a class="mini hoverable" v-for="c in stripCourses" :key="c.id" @click="go('courses')" role="button" tabindex="0">
             <div class="mini-title">{{ c.title }}</div>
             <div class="mini-sub">{{ c.instructor }}</div>
             <div class="mini-meta"><span class="tag">{{ KIND[c.kind] || c.kind }}</span></div>

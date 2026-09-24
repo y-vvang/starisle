@@ -3,6 +3,11 @@ import { api, post, patch, del, toast } from '../lib/api';
 import type { ApiResp } from '../lib/api';
 import { go } from '../lib/router';
 
+// 后端分页响应的兄弟键(lib/pagination.ts 的 pageMeta)
+export interface Pagination {
+  page: number; per_page: number; total: number; total_pages: number;
+}
+
 // —— 与后端响应对应的形状 ——
 // 认真类型化的是真实被消费的字段;旧壳组件(docs/MODULES.md 记录的过渡空壳)
 // 仍会访问的过渡字段用可选属性 + 索引签名兜住,分页改造清壳时一并收紧。
@@ -68,10 +73,21 @@ interface Store {
   domains: Domain[]; dcolor: Record<string, string>; dname: Record<string, string>;
   stats: Record<string, number>;
   projects: ProjectCard[];
+  // 项目列表的分页缓存:ProjectsSection 的列表页数据走这里
+  // (page/domain/filters 变化时由 refreshProjects 重拉;loaded 标志让
+  // ProjectEditPage 保存后的 refreshProjects 只刷已加载过的列表)。
+  projectsState: {
+    loaded: boolean;
+    page: number; perPage: number; domain: string;
+    list: ProjectCard[];
+    pagination: Pagination | null;
+    domainCounts: Record<string, number>;
+  };
   members: MemberCard[];
   registrationOpen: boolean;
   // courses 现在是真数据(GET /api/courses,只含已发布的),首页那条 strip 不再是空壳。
   courses: CourseCard[];
+  coursesPagination: Pagination | null;
   // 以下字段在新后端里仍没有对应端点(专栏/活动/学生报道/资源这几个产品模块
   // 已在前端重写中整体下线)。保留为安全的空默认值,只是为了让还没重做的旧壳
   // 组件(HomePage 的对应几条 strip)取用时不报错、优雅渲染成空列表。
@@ -88,15 +104,25 @@ interface Store {
   drawer: { open: boolean; kind: string; data: DrawerMember | null };
 }
 
+const blankProjectsState = () => ({
+  loaded: false,
+  page: 1, perPage: 20, domain: '',
+  list: [] as ProjectCard[],
+  pagination: { page: 1, per_page: 20, total: 0, total_pages: 1 } as Pagination,
+  domainCounts: {} as Record<string, number>,
+});
+
 export const store = reactive<Store>({
   ready: false,
   user: null,                 // 当前登录用户(来自 HttpOnly cookie 会话),未登录为 null
   domains: [], dcolor: {}, dname: {},
   stats: {},
   projects: [],
+  projectsState: blankProjectsState(),
   members: [],
   registrationOpen: true,
   courses: [],
+  coursesPagination: null,
   gatherings: [], talent: [],
   homeConfig: { heroTitle: '', heroDesc: '', featured: { projects: [], courses: [], columns: [], activities: [], students: [], resources: [] } },
   highlights: { posts: [], pulse: [], chronicles: [] },
@@ -131,22 +157,16 @@ const cardifyCourses = (list: CourseCard[] | null | undefined): CourseCard[] =>
   }));
 
 export async function boot() {
-  const [me, domains, projects, members, stats, settings, courses] = await Promise.all([
+  const [me, domains, stats, settings] = await Promise.all([
     api('/auth/me').catch((): ApiResp => ({})),
     api('/domains').catch((): ApiResp => ({})),
-    api('/projects').catch((): ApiResp => ({})),
-    api('/members').catch((): ApiResp => ({})),
     api('/stats').catch((): ApiResp => ({})),
     api('/settings/public').catch((): ApiResp => ({})),
-    api('/courses').catch((): ApiResp => ({})),
   ]);
-  store.courses = cardifyCourses(courses && courses.courses);
   store.user = (me && me.user) || null;
   store.domains = (domains && domains.domains) || [];
   store.dcolor = Object.fromEntries(store.domains.map(d => [d.id, d.color]));
   store.dname = Object.fromEntries(store.domains.map(d => [d.id, d.name]));
-  store.projects = cardifyProjects((projects && projects.projects) || []);
-  store.members = (members && members.members) || [];
   store.stats = stats || {};
   store.registrationOpen = !!(settings && settings.registration_open);
   store.ready = true;
@@ -250,9 +270,11 @@ export async function actProjectPosterRemove(slug: string): Promise<ApiResp> {
 }
 
 // 加入申请队列:只有项目 owner 或站长能看/能处理,后端已鉴权,这里只是薄封装。
-export async function fetchJoinRequests(slug: string) {
-  const r = await api(`/projects/${slug}/join-requests`);
-  return (r && r.requests) || [];
+// ?status=pending:详情页的"待处理队列"只关心待处理项;端点默认仍全量返回
+// (向后兼容),要待办队列的调用方传状态(C2 起)。返回 [列表, meta]。
+export async function fetchJoinRequests(slug: string, status = 'pending') {
+  const r = await api(`/projects/${slug}/join-requests?status=${status}`);
+  return { list: (r && r.requests) || [], pagination: (r && r.pagination) || null };
 }
 // 端点是 /decision 不是 /decide,见 app/routes/projects.ts 顶部那条注释——
 // 'decide' 是路由守卫里的保留动词,撞上会被强判成"仅站长",而这条端点的
@@ -264,6 +286,8 @@ export async function actJoinRequestDecision(id: number, decision: string): Prom
 // 发起项目:接到真实的 POST /api/projects。旧表单字段名(domain/desc/repo)在这里
 // 适配成新接口的字段名(domain_id/description/repo_url);founderId/stack/gaps 新接口
 // 不认,直接丢弃 —— 发起人由服务端从登录会话推断,不再靠前端传参。
+// 成功后重拉分页列表:新项目是 pending、本就不进公开列表,这次重拉对可见性是
+// no-op,保留它只为维持"提交成功后列表与库一致"的语义。
 export async function actPublishProject(body: Record<string, unknown>): Promise<ApiResp> {
   if (!requireLogin('发起项目')) return { error: '请先登录' };
   const r = await post('/projects', {
@@ -273,18 +297,52 @@ export async function actPublishProject(body: Record<string, unknown>): Promise<
     // 用户填了不报错、照样提示"已提交",值却不落库。现在接上真实字段。
     stack: body.stack, gaps: body.gaps,
   });
-  if (r && r.ok) {
-    const fresh = await api('/projects');
-    store.projects = cardifyProjects((fresh && fresh.projects) || []);
+  if (r && r.ok && store.projectsState.loaded) {
+    await refreshProjects();
   }
   return r;
 }
 
+// —— 项目列表(分页缓存)——
+// ProjectsSection 是列表页主人:filters/page 变化时带参调用,翻页只换 page。
+// loaded 标志:首次进页面才拉,二次进入用缓存;actPublishProject/actUpdateProject
+// 成功后的重拉只在已加载过时执行,不会把首页时序搅进列表页。
+export async function refreshProjects(opts: { page?: number; domain?: string; reset?: boolean } = {}) {
+  const s = store.projectsState;
+  if (opts.reset) {
+    s.page = 1; s.domain = '';
+  }
+  if (opts.page !== undefined) s.page = opts.page;
+  if (opts.domain !== undefined) s.domain = opts.domain;
+  const params = new URLSearchParams();
+  params.set('page', String(s.page));
+  params.set('per_page', String(s.perPage));
+  if (s.domain) params.set('domain', s.domain);
+  const r = await api('/projects?' + params.toString());
+  if (!r || r.error) return s;               // 失败保持旧数据,不让列表闪空
+  s.list = cardifyProjects((r && r.projects) || []);
+  s.pagination = r.pagination || s.pagination;
+  s.domainCounts = (r && r.domain_counts) || {};
+  s.loaded = true;
+  return s;
+}
+
 // —— 课程中心 ——
 
-export async function refreshCourses(track = ''): Promise<CourseCard[]> {
-  const r = await api('/courses' + (track ? `?track=${encodeURIComponent(track)}` : ''));
+// track/q/page 透传给服务端(?track= 服务端已支持,?q= 是 C1 的四字段 ILIKE);
+// q 竞态保护:用一个自增号,晚发起的响应覆盖早发起的。
+let coursesSeq = 0;
+export async function refreshCourses(opts: { track?: string; q?: string; page?: number; perPage?: number } = {}): Promise<CourseCard[]> {
+  const seq = ++coursesSeq;
+  const params = new URLSearchParams();
+  if (opts.track) params.set('track', opts.track);
+  if (opts.q) params.set('q', opts.q);
+  params.set('page', String(opts.page ?? 1));
+  params.set('per_page', String(opts.perPage ?? 20));
+  const r = await api('/courses?' + params.toString());
+  if (seq !== coursesSeq) return store.courses;   // 已有更新的请求在途,丢弃旧响应
   store.courses = cardifyCourses(r && r.courses);
+  store.coursesPagination = (r && r.pagination) || null;
   return store.courses;
 }
 
@@ -305,12 +363,12 @@ export async function fetchMyCourses() {
 
 // 编辑项目:属主或站长。表单是整体提交的,所以整份发过去 —— 后端 collectContent
 // 只认请求里出现过的键,传空数组会清空、缺席则原值不动,不会出现"改了名字把成果清空"。
+// 成功后刷新分页缓存(改了名字/标语时,列表页缓存里还是旧值)。
 export async function actUpdateProject(slug: string, body: Record<string, unknown>): Promise<ApiResp> {
   if (!requireLogin('编辑项目')) return { error: '请先登录' };
   const r = await patch('/projects/' + encodeURIComponent(slug), body);
-  if (r && r.ok) {
-    const fresh = await api('/projects');
-    store.projects = cardifyProjects((fresh && fresh.projects) || []);
+  if (r && r.ok && store.projectsState.loaded) {
+    await refreshProjects();
   }
   return r;
 }

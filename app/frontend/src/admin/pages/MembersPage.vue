@@ -3,16 +3,28 @@ import { inject, onMounted, ref } from 'vue';
 import type { Ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const me = inject<Ref<any>>('me', ref<any>(null));
 const members = ref<any[]>([]);
 const busy = ref<string | number>('');
+const page = ref(1);
+const pagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
 
-async function load() {
-  const r = await api('/members');
+async function load(p = page.value) {
+  page.value = p;
+  const r = await api('/members' + (p > 1 ? `?page=${p}` : ''));
   members.value = (r && r.members) || [];
+  pagination.value = (r && r.pagination) || pagination.value;
 }
-onMounted(load);
+onMounted(() => load());
+
+// 与 UserReviewPage 同一条钳制:当前页删空退回 total_pages
+async function loadClamped() {
+  await load();
+  const tp = pagination.value.total_pages;
+  if (page.value > tp) await load(Math.max(1, tp));
+}
 
 // id 是 number:app/db/pool.ts 给 bigint(OID 20)注册了 Number 类型解析器,
 // 每条从 pg 出来的 id 天生就是数字。这里的 me.id === m.id 与 busy === m.id
@@ -24,8 +36,10 @@ async function suspend(m: any) {
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '操作失败');
   toast(`已停用「${r.username}」`);
-  await load();
+  await loadClamped();
 }
+
+function pickPage(p: number) { load(p); }
 </script>
 
 <template>
@@ -46,6 +60,9 @@ async function suspend(m: any) {
         <button class="btn small danger" v-else :disabled="busy === m.id" @click="suspend(m)"><Icon name="x" /> 停用</button>
       </div>
     </div>
+
+    <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                   :total="pagination.total" @change="pickPage" />
   </section>
 </template>
 

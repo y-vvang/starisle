@@ -2,8 +2,10 @@
 // #/my-courses —— 我申请过的课程与状态。
 import { ref, watch } from 'vue';
 import { store, fetchMyCourses, requireLogin, TRACKS } from '../store';
+import { api } from '../../lib/api';
 import { go } from '../../lib/router';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 // /api/my/courses 的行:course 卡片 + enrollment_status/enrollment_created_at
 interface MyCourse {
@@ -12,12 +14,18 @@ interface MyCourse {
   enrollment_status: string; [key: string]: any;
 }
 const list = ref<MyCourse[]>([]);
+const page = ref(1);
+const pagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
 const loading = ref(true);
+
+function pickPage(p: number) { page.value = p; load(); }
 
 async function load() {
   if (!store.user) { list.value = []; loading.value = false; return; }
   loading.value = true;
-  list.value = await fetchMyCourses() as MyCourse[];
+  const r = await api('/my/courses' + (page.value > 1 ? `?page=${page.value}` : ''));
+  list.value = (r && r.courses) || [];
+  pagination.value = (r && r.pagination) || pagination.value;
   loading.value = false;
 }
 watch(() => store.user, load, { immediate: true });
@@ -66,6 +74,8 @@ const LABEL: Record<string, string> = { pending: '审核中', approved: '可以�
         </div>
       </a>
     </div>
+      <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                     :total="pagination.total" @change="pickPage" />
   </div>
 </template>
 

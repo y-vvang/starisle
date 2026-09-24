@@ -2,16 +2,28 @@
 import { inject, onMounted, ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const shared = inject<{ dname: Record<string, string>; dcolor: Record<string, string> }>('shared', { dname: {}, dcolor: {} });
 const pending = ref<any[]>([]);
 const busy = ref<string | number>('');
+const page = ref(1);
+const pagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
 
-async function load() {
-  const r = await api('/admin/projects/pending');
+async function load(p = page.value) {
+  page.value = p;
+  const r = await api('/admin/projects/pending' + (p > 1 ? `?page=${p}` : ''));
   pending.value = (r && r.projects) || [];
+  pagination.value = (r && r.pagination) || pagination.value;
 }
-onMounted(load);
+onMounted(() => load());
+
+// 与 UserReviewPage 同一条钳制:当前页删空退回 total_pages
+async function loadClamped() {
+  await load();
+  const tp = pagination.value.total_pages;
+  if (page.value > tp) await load(Math.max(1, tp));
+}
 
 async function review(pj: any, decision: string) {
   busy.value = pj.id;
@@ -19,8 +31,10 @@ async function review(pj: any, decision: string) {
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '操作失败');
   toast(decision === 'approve' ? `已通过「${r.name}」,已上线到项目中心` : `已驳回「${r.name}」`);
-  await load();
+  await loadClamped();
 }
+
+function pickPage(p: number) { load(p); }
 </script>
 
 <template>
@@ -50,6 +64,9 @@ async function review(pj: any, decision: string) {
         <button class="btn small ghost" :disabled="busy === pj.id" @click="review(pj, 'reject')"><Icon name="x" /> 驳回</button>
       </div>
     </div>
+
+    <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                   :total="pagination.total" @change="pickPage" />
   </section>
 </template>
 

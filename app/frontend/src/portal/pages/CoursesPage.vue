@@ -1,35 +1,40 @@
 <script setup lang="ts">
 // #/courses —— 课程中心列表。
-// 分类切换走服务端(?track=),关键词搜索在前端本地过滤 —— 列表本来就一次性
-// 返回全部已发布课程,再为搜索多打一趟接口不值。
-import { ref, computed, onMounted } from 'vue';
+// 分类(track)与关键词搜索都走服务端:?track= 一直就有;?q= 是分页改造时
+// 服务端化的(原先本地 includes 过滤,分页后只能过滤当前页,会漏其他页的匹配)。
+import { ref, computed, onMounted, watch } from 'vue';
 import { store, refreshCourses, TRACKS } from '../store';
 import type { CourseCard } from '../store';
 import { go } from '../../lib/router';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const track = ref('');
 const q = ref('');
+const page = ref(1);
 const loading = ref(true);
 
 const TABS: [string, string][] = [['', '全部'], ...Object.entries(TRACKS)];
 
 async function load() {
   loading.value = true;
-  await refreshCourses(track.value);
+  await refreshCourses({ track: track.value, q: q.value.trim(), page: page.value });
   loading.value = false;
 }
 onMounted(load);
 
-function pick(t: string) { track.value = t; load(); }
-
-const visible = computed(() => {
-  const kw = q.value.trim().toLowerCase();
-  if (!kw) return store.courses;
-  return store.courses.filter(c =>
-    [c.title, c.subject, c.summary, c.instructors].some(
-      v => v && String(v).toLowerCase().includes(kw)));
+// 搜索防抖:300ms 内继续输入不重拉;搜索/切分类都重置回第 1 页。
+let qTimer: ReturnType<typeof setTimeout> | null = null;
+watch(q, () => {
+  if (qTimer) clearTimeout(qTimer);
+  qTimer = setTimeout(() => { page.value = 1; load(); }, 300);
 });
+
+function pick(t: string) { track.value = t; page.value = 1; load(); }
+function pickPage(p: number) { page.value = p; load(); window.scrollTo({ top: 0 }); }
+
+const visible = computed(() => store.courses);
+const pagination = computed(() => store.coursesPagination ?? { page: 1, per_page: 20, total: 0, total_pages: 1 });
 
 const hours = (c: CourseCard) => (c.total_hours == null ? '持续更新' : `${c.total_hours} 课时`);
 </script>
@@ -60,25 +65,29 @@ const hours = (c: CourseCard) => (c.total_hours == null ? '持续更新' : `${c.
       {{ q.trim() ? '没有匹配的课程。' : '这个分类下还没有已发布的课程。' }}
     </p>
 
-    <div v-else class="grid c3">
-      <a v-for="c in visible" :key="c.id" class="card cs-card hoverable"
-         role="button" tabindex="0"
-         @click="go('course/' + encodeURIComponent(c.slug))"
-         @keydown.enter="go('course/' + encodeURIComponent(c.slug))">
-        <div class="cs-top">
-          <span class="badge">{{ TRACKS[c.track] || c.track }}</span>
-          <span class="badge polaris" v-if="c.featured"><Icon name="star" /> 精选</span>
-        </div>
-        <h3 class="cs-title">{{ c.title }}</h3>
-        <p class="cs-sum dim">{{ c.summary }}</p>
-        <div class="cs-meta dim">
-          <span v-if="c.instructors"><Icon name="user" /> {{ c.instructors }}</span>
-          <span><Icon name="clock" /> {{ hours(c) }}</span>
-          <span v-if="c.lesson_count"><Icon name="scroll" /> {{ c.lesson_count }} 节</span>
-        </div>
-        <div class="cs-go">查看课程 <Icon name="arrow" /></div>
-      </a>
-    </div>
+    <template v-else>
+      <div class="grid c3">
+        <a v-for="c in visible" :key="c.id" class="card cs-card hoverable"
+           role="button" tabindex="0"
+           @click="go('course/' + encodeURIComponent(c.slug))"
+           @keydown.enter="go('course/' + encodeURIComponent(c.slug))">
+          <div class="cs-top">
+            <span class="badge">{{ TRACKS[c.track] || c.track }}</span>
+            <span class="badge polaris" v-if="c.featured"><Icon name="star" /> 精选</span>
+          </div>
+          <h3 class="cs-title">{{ c.title }}</h3>
+          <p class="cs-sum dim">{{ c.summary }}</p>
+          <div class="cs-meta dim">
+            <span v-if="c.instructors"><Icon name="user" /> {{ c.instructors }}</span>
+            <span><Icon name="clock" /> {{ hours(c) }}</span>
+            <span v-if="c.lesson_count"><Icon name="scroll" /> {{ c.lesson_count }} 节</span>
+          </div>
+          <div class="cs-go">查看课程 <Icon name="arrow" /></div>
+        </a>
+      </div>
+      <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                     :total="pagination.total" @change="pickPage" />
+    </template>
   </div>
 </template>
 

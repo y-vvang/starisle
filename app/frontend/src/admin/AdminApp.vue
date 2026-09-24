@@ -59,18 +59,20 @@ async function loadDomains() {
 // **刻意不做轮询**:本项目主站的通知铃铛也是不轮询的(见 docs/API.md),后台再引一个
 // 定时器会多出一条需要在 onUnmounted 里收尾的生命周期,收益不抵复杂度。
 const badges = reactive<Record<string, number>>({ users: 0, projects: 0, courses: 0, mentors: 0 });
-const len = (r: unknown): number => (Array.isArray(r) ? r.length : 0);
+// 角标读分页 meta 的 total:列表响应被 per_page 截断后,length 变成
+// "第一页条数",总数只有 pagination.total 是真的(per_page=1 把请求体压到最小)。
+const totalOf = (r: any): number => (r && r.pagination && r.pagination.total) ?? 0;
 async function refreshBadges() {
   const [u, p, ce, mr] = await Promise.all([
-    api('/admin/users/pending').catch((): ApiResp => ({})),
-    api('/admin/projects/pending').catch((): ApiResp => ({})),
-    api('/admin/course-enrollments?status=pending').catch((): ApiResp => ({})),
-    api('/admin/mentor-requests?status=pending').catch((): ApiResp => ({})),
+    api('/admin/users/pending?per_page=1').catch((): ApiResp => ({})),
+    api('/admin/projects/pending?per_page=1').catch((): ApiResp => ({})),
+    api('/admin/course-enrollments?status=pending&per_page=1').catch((): ApiResp => ({})),
+    api('/admin/mentor-requests?status=pending&per_page=1').catch((): ApiResp => ({})),
   ]);
-  badges.users = len(u && u.users);
-  badges.projects = len(p && p.projects);
-  badges.courses = len(ce && ce.requests);
-  badges.mentors = len(mr && mr.requests);
+  badges.users = totalOf(u);
+  badges.projects = totalOf(p);
+  badges.courses = totalOf(ce);
+  badges.mentors = totalOf(mr);
 }
 
 async function refreshMe(): Promise<any> {

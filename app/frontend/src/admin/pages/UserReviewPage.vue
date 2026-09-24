@@ -2,14 +2,28 @@
 import { onMounted, ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const pending = ref<any[]>([]);
 const busy = ref<string | number>('');
-async function load() {
-  const r = await api('/admin/users/pending');
+const page = ref(1);
+const pagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
+
+async function load(p = page.value) {
+  page.value = p;
+  const r = await api('/admin/users/pending' + (p > 1 ? `?page=${p}` : ''));
   pending.value = (r && r.users) || [];
+  pagination.value = (r && r.pagination) || pagination.value;
 }
-onMounted(load);
+onMounted(() => load());
+
+// 审核完一条后重拉当前页,并按"这页删空了就退回上一页"钳制:
+// 站长清完最后一页最后一条时,不该停在一个空页号上。
+async function loadClamped() {
+  await load();
+  const tp = pagination.value.total_pages;
+  if (page.value > tp) await load(Math.max(1, tp));
+}
 
 // user.id 是 number(app/db/pool.ts 给 bigint/OID 20 注册了 Number 解析器);
 // busy 与 u.id 同源,直接 === 比较,不需要转型。
@@ -19,8 +33,10 @@ async function review(u: any, decision: string) {
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '操作失败');
   toast(decision === 'approve' ? `已通过「${r.username}」的加入申请` : `已婉拒「${r.username}」`);
-  await load();
+  await loadClamped();
 }
+
+function pickPage(p: number) { load(p); }
 </script>
 
 <template>
@@ -28,7 +44,7 @@ async function review(u: any, decision: string) {
     <h2>待审用户 · Admission <span style="font-size:13px;color:var(--ink-3);font-weight:400">邀请制 + 审核制</span></h2>
     <p class="page-sub">逐份人工审核申请,通过后即可用账号密码登录。</p>
 
-    <h3 class="sec-h"><Icon name="user" style="color:var(--warn)" /> 待审申请 <span class="cnt">{{ pending.length }}</span></h3>
+    <h3 class="sec-h"><Icon name="user" style="color:var(--warn)" /> 待审申请 <span class="cnt">{{ pagination.total }}</span></h3>
     <div class="empty" v-if="!pending.length"><Icon name="check" style="color:var(--ok)" /> 暂无待审的加入申请。</div>
 
     <div class="card ua" v-for="u in pending" :key="u.id">
@@ -45,6 +61,9 @@ async function review(u: any, decision: string) {
       </div>
       <div class="ua-note">"{{ u.apply_note }}"</div>
     </div>
+
+    <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                   :total="pagination.total" @change="pickPage" />
   </section>
 </template>
 

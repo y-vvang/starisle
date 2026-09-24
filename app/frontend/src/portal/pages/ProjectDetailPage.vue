@@ -69,11 +69,11 @@ async function load(id: string) {
   loading.value = false;
   joinRequests.value = [];
   if (p.value && !p.value.error && isOwnerOrAdmin.value) {
-    // GET /projects/:slug/join-requests 返回的是**全部**状态(pending/accepted/rejected),
-    // 不是待办队列。此前直接整份渲染,于是已经处理过的申请刷新页面后会重新冒出来,
-    // 还带着能点的通过/拒绝 —— 点下去只会拿到 409。这里只留待处理的。
-    const all = await fetchJoinRequests(p.value.slug);
-    joinRequests.value = (all || []).filter((x: any) => x.status === 'pending');
+    // GET /projects/:slug/join-requests 默认返回**全部**状态(pending/accepted/rejected),
+    // 不是待办队列;此前是全量拉回后前端自筛 pending —— 分页改造后改走
+    // ?status=pending(C1 起端点支持),服务端筛 + 服务端分页。
+    const { list } = await fetchJoinRequests(p.value.slug, 'pending');
+    joinRequests.value = list;
   }
 }
 watch(() => router.param, load, { immediate: true });

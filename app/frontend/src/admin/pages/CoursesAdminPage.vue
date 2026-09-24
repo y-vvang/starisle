@@ -3,18 +3,11 @@
 import { ref, computed, onMounted } from 'vue';
 import { api, post, patch, del, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const TRACKS: Record<string, string> = { math: '数学基础', literacy: '人工智能通识',
                  extension: '学科拓展', application: 'AI 编程与应用' };
 const STATUS: Record<string, string> = { draft: '草稿', pending: '待审', published: '已发布', archived: '已下架' };
-
-const tab = ref('lib');
-const courses = ref<any[]>([]);
-const requests = ref<any[]>([]);
-const lessons = ref<any[]>([]);
-const sel = ref<number | null>(null);   // 当前编辑/编排的课程 id
-const busy = ref('');
-const err = ref('');
 
 interface CourseForm {
   title: string; track: string; subject: string; summary: string;
@@ -26,15 +19,33 @@ const blank = (): CourseForm => ({ title: '', track: 'math', subject: '', summar
 const f = ref<CourseForm>(blank());
 const editing = ref<number | null>(null);      // null = 新建
 
-const pendingCount = computed(() => requests.value.filter(r => r.status === 'pending').length);
+const tab = ref('lib');
+const courses = ref<any[]>([]);
+const requests = ref<any[]>([]);
+const lessons = ref<any[]>([]);
+const reqPage = ref(1);
+const reqPagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
+const sel = ref<number | null>(null);   // 当前编辑/编排的课程 id
+const busy = ref('');
+const err = ref('');
 
 async function loadCourses() {
   const r = await api('/admin/courses');
   courses.value = (r && r.courses) || [];
 }
-async function loadRequests() {
-  const r = await api('/admin/course-enrollments');
+// 申请 tab 只拉待处理的队列(?status=pending);页头计数用 pagination.total
+// (列表被 per_page 截断后 length 只是第一页条数)。课程库 tab 不分页:
+// 课节编排的下拉需要全量,站长建课量级有界(见 C1 决策)。
+async function loadRequests(p = reqPage.value) {
+  reqPage.value = p;
+  const r = await api('/admin/course-enrollments?status=pending' + (p > 1 ? `&page=${p}` : ''));
   requests.value = (r && r.requests) || [];
+  reqPagination.value = (r && r.pagination) || reqPagination.value;
+}
+async function loadRequestsClamped() {
+  await loadRequests();
+  const tp = reqPagination.value.total_pages;
+  if (reqPage.value > tp) await loadRequests(Math.max(1, tp));
 }
 async function loadLessons(slug: string | null | undefined) {
   if (!slug) { lessons.value = []; return; }
@@ -140,8 +151,10 @@ async function decide(req: any, decision: string) {
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '操作失败');
   toast(decision === 'approve' ? '已开通' : '已拒绝');
-  await loadRequests();
+  await loadRequestsClamped();
 }
+
+function pickReqPage(p: number) { loadRequests(p); }
 </script>
 
 <template>
@@ -156,7 +169,7 @@ async function decide(req: any, decision: string) {
       <button class="mode-tab" :class="{ on: tab === 'lib' }" @click="tab = 'lib'">课程库 ({{ courses.length }})</button>
       <button class="mode-tab" :class="{ on: tab === 'lesson' }" @click="tab = 'lesson'">课节编排</button>
       <button class="mode-tab" :class="{ on: tab === 'apply' }" @click="tab = 'apply'">
-        学习申请 <span class="cnt" v-if="pendingCount">{{ pendingCount }}</span>
+        学习申请 <span class="cnt" v-if="reqPagination.total">{{ reqPagination.total }}</span>
       </button>
     </div>
 
@@ -271,6 +284,9 @@ async function decide(req: any, decision: string) {
           <button class="btn small ghost" :disabled="busy === 'e' + r.id" @click="decide(r, 'reject')"><Icon name="x" /> 拒绝</button>
         </div>
       </div>
+
+      <PaginationBar :page="reqPagination.page" :per-page="reqPagination.per_page"
+                     :total="reqPagination.total" @change="pickReqPage" />
     </div>
   </section>
 </template>

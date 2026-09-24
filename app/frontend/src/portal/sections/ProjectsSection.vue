@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
-import { store, openProject, actPublishProject } from '../store';
-import type { ProjectCard } from '../store';
+import { computed, onMounted, reactive, ref } from 'vue';
+import { store, openProject, actPublishProject, refreshProjects } from '../store';
 import { STATUS, toast } from '../../lib/api';
 import { t } from '../../lib/i18n';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
-const sf = ref('');       // 状态筛选
-const df = ref('');       // 领域筛选
-const showPub = ref(false);
-const busy = ref(false);
-
-// 状态标签(基于真实生命周期 + 招募中缺口)
+// 状态标签:恒为 0 的文档化空壳(公开列表全 approved、card 不带 gaps,
+// 前三个值在库里不存在、recruit 比对恒空)—— 分页改造不动这个壳,
+// 清壳是过渡期收尾的事,见 docs/MODULES.md。
 const STATUS_TABS: [string, string][] = [
   ['', '全部'],
   ['thriving', '存活 90 天+'],
@@ -19,14 +16,29 @@ const STATUS_TABS: [string, string][] = [
   ['incubating', '孵化中'],
   ['recruit', '招募中'],
 ];
-function matchStatus(p: ProjectCard): boolean {
-  if (!sf.value) return true;
-  if (sf.value === 'recruit') return !!(p.gaps && p.gaps.length);
-  return p.status === sf.value;
+
+// 领域筛选走服务端(?domain=):切换即重置回第 1 页。
+const df = ref('');
+const showPub = ref(false);
+const busy = ref(false);
+
+const list = computed(() => store.projectsState.list);
+const pagination = computed(() => store.projectsState.pagination
+  ?? { page: 1, per_page: 20, total: 0, total_pages: 1 });
+// 领域 chip 的"有没有项目"凭证:GET /api/projects 随响应带 domain_counts
+// (全库 approved 计数,不被当前筛选/页码影响)——chips 不再依赖整份列表。
+const countDomain = (d: string) => store.projectsState.domainCounts[d] || 0;
+
+onMounted(() => { refreshProjects({ reset: true }); });
+
+function pickDomain(d: string) {
+  df.value = d;
+  refreshProjects({ reset: true, domain: d });
 }
-const list = computed(() => store.projects.filter(p => matchStatus(p) && (!df.value || p.domain === df.value)));
-const countStatus = (s: string) => store.projects.filter(p => s === 'recruit' ? !!(p.gaps && p.gaps.length) : p.status === s).length;
-const countDomain = (d: string) => store.projects.filter(p => p.domain === d).length;
+function pickPage(p: number) {
+  refreshProjects({ page: p });
+  window.scrollTo({ top: (document.getElementById('projects')?.offsetTop ?? 0) - 60 });
+}
 
 const pf = reactive({ name: '', domain: 'agent', tagline: '', desc: '', repo: '', stack: '', gap: '' });
 async function publish() {
@@ -62,18 +74,19 @@ async function publish() {
       <!-- 浏览 + 发布 同页:顶部一行操作 -->
       <div class="page-bar" v-reveal="1">
         <div class="tabs">
-          <span class="chip" v-for="[k, l] in STATUS_TABS" :key="k" :class="{ active: sf === k }" @click="sf = k">
-            {{ l }}<span class="c" v-if="k">{{ countStatus(k) }}</span><span class="c" v-else>{{ store.projects.length }}</span>
+          <!-- 状态标签是文档化空壳(见 script 注释):recruit 等值恒 0,只有"全部"亮 -->
+          <span class="chip" v-for="[k, l] in STATUS_TABS" :key="k" :class="{ active: !k }">
+            {{ l }}<span class="c" v-if="k">0</span><span class="c" v-else>{{ pagination.total }}</span>
           </span>
         </div>
         <button class="btn small primary" @click="showPub = !showPub"><Icon name="flag" /> {{ showPub ? '收起' : '发起项目' }}</button>
       </div>
 
-      <!-- 领域二级筛选 -->
+      <!-- 领域二级筛选:服务端 ?domain=,计数来自 domain_counts -->
       <div class="proj-filters sub" v-reveal="1">
-        <span class="chip mini" :class="{ active: !df }" @click="df = ''">全部领域</span>
+        <span class="chip mini" :class="{ active: !df }" @click="pickDomain('')">全部领域</span>
         <template v-for="d in store.domains" :key="d.id">
-          <span v-if="countDomain(d.id)" class="chip mini" :class="{ active: df === d.id }" @click="df = d.id">
+          <span v-if="countDomain(d.id)" class="chip mini" :class="{ active: df === d.id }" @click="pickDomain(d.id)">
             <span class="dot" :style="{ background: d.color }"></span>{{ d.name }}
           </span>
         </template>
@@ -93,7 +106,7 @@ async function publish() {
         <button class="btn primary" :disabled="busy" @click="publish"><Icon name="check" /> 提交(运营审核后上线)</button>
       </div>
 
-      <div class="proj-count" v-reveal="1">{{ list.length }} 个项目</div>
+      <div class="proj-count" v-reveal="1">共 {{ pagination.total }} 个项目</div>
 
       <div class="grid c3">
         <div class="card proj-card hoverable" v-for="(p, i) in list" :key="p.id"
@@ -110,6 +123,9 @@ async function publish() {
           <div class="gap-flag" v-if="p.gaps.length"><Icon name="flag" /> 缺 {{ p.gaps.map(g => g.skill).join('、') }} —— 等你补位</div>
         </div>
       </div>
+
+      <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                     :total="pagination.total" @change="pickPage" />
     </div>
   </section>
 </template>
@@ -119,6 +135,7 @@ async function publish() {
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .tabs .chip .c { margin-left: 6px; font-size: 11px; color: var(--ink-3); }
 .tabs .chip.active .c { color: inherit; }
+.tabs .chip { cursor: default; }   /* 恒 0 的空壳标签不可点 */
 .proj-filters.sub { margin-bottom: 18px; opacity: .92; }
 .proj-filters.sub .chip.mini { font-size: 12px; padding: 4px 10px; }
 .pub-form { margin-bottom: 20px; padding: 20px 22px; }

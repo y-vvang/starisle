@@ -8,12 +8,15 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { store, requireLogin } from '../store';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
+import PaginationBar from '../../components/PaginationBar.vue';
 
 const mentors = ref<any[]>([]);
 const partners = ref<any[]>([]);
 const myReq = ref<Record<string, any>>({});  // mentor slug -> 我的申请状态
 const course = ref('');
 const cat = ref('中学');
+const page = ref(1);
+const pagination = ref({ page: 1, per_page: 20, total: 0, total_pages: 1 });
 const loading = ref(true);
 const busy = ref(false);
 
@@ -25,26 +28,24 @@ const HOURS = ['<2h', '2-4h', '4-6h', '>6h'];
 const CATS = ['中学', '大学', '企业'];
 const LABEL: Record<string, string> = { pending: '申请审核中', approved: '已通过,等待对接', completed: '已对接', rejected: '未通过' };
 
-// 选项只在「全部课程」那次结果上算一次,之后固定不变。
-// 若从**已筛选**的 mentors 推导(它是 computed 时的写法),选中「线代」之后列表只剩一位
-// 导师,下拉选项就会跟着塌缩成他教的那三门 —— 其余课从选项里消失,用户必须先切回
-// 「全部课程」才能换一门筛。
+// 筛选下拉走独立端点 GET /api/mentor-courses(全部导师的 distinct 课程标题)。
+// 原先从「未筛选」的导师列表推导 —— 分页后第一页不再代表全部,选项会缺。
 const courseOptions = ref<string[]>([]);
 const shownPartners = computed(() => partners.value.filter(p => p.category === cat.value));
 
 async function load() {
   loading.value = true;
-  const [ms, ps] = await Promise.all([
-    api('/mentors' + (course.value ? `?course=${encodeURIComponent(course.value)}` : '')),
+  const params = new URLSearchParams({ page: String(page.value), per_page: '20' });
+  if (course.value) params.set('course', course.value);
+  const [ms, ps, cs] = await Promise.all([
+    api('/mentors?' + params.toString()),
     api('/partners'),
+    courseOptions.value.length ? Promise.resolve(null) : api('/mentor-courses'),
   ]);
   mentors.value = (ms && ms.mentors) || [];
+  pagination.value = (ms && ms.pagination) || pagination.value;
   partners.value = (ps && ps.partners) || [];
-  if (!course.value) {
-    const s = new Set<string>();
-    for (const m of mentors.value) for (const c of (m.courses || [])) s.add(c.title);
-    courseOptions.value = [...s].sort();
-  }
+  if (cs && cs.courses) courseOptions.value = cs.courses;
   loading.value = false;
   await loadMine();
 }
@@ -59,6 +60,14 @@ async function loadMine() {
 }
 onMounted(load);
 watch(() => store.user, loadMine);
+
+function pickCourse(t: string) { course.value = t; page.value = 1; load(); }
+function pickPage(p: number) { page.value = p; load(); onScrollToMentors(); }
+
+// 翻页后把视线带回导师网格顶部(课程筛选 select 在上方,滚过头会找不到列表)
+function onScrollToMentors() {
+  window.scrollTo({ top: (document.querySelector('.mt-tools') as HTMLElement | null)?.offsetTop ?? 0 });
+}
 
 function openApply(m: any) {
   if (!requireLogin('申请指导')) return;
@@ -103,7 +112,7 @@ async function withdraw(m: any) {
 
     <div class="mt-tools" v-if="courseOptions.length">
       <label class="dim">按课程筛选</label>
-      <select v-model="course" @change="load">
+      <select :value="course" @change="pickCourse(($event.target as HTMLInputElement).value)">
         <option value="">全部课程</option>
         <option v-for="t in courseOptions" :key="t" :value="t">{{ t }}</option>
       </select>
@@ -132,6 +141,9 @@ async function withdraw(m: any) {
           <button v-else class="btn small primary" @click="openApply(m)"><Icon name="send" /> 申请指导</button>
         </div>
       </div>
+
+      <PaginationBar :page="pagination.page" :per-page="pagination.per_page"
+                     :total="pagination.total" @change="pickPage" />
     </div>
 
     <!-- 合作机构 -->
