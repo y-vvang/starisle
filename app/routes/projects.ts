@@ -1,10 +1,16 @@
-import { and, desc, asc, eq, sql } from 'drizzle-orm';
+import { and, desc, asc, eq, inArray, sql, getTableColumns } from 'drizzle-orm';
 import { db, tx, pgCode } from '../db/pool';
 import { domains, projectFollows, projectJoinRequests, projectMembers, projects, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
+import { parsePagination, pageMeta } from '../lib/pagination';
+import { statusesParam } from '../lib/statuses';
 import { notify } from './notifications';
 import { str } from '../lib/str';
 import type { RouteHandler } from './types';
+
+// join-requests 的合法状态集:project_join_requests 是 accepted(不是 approved,
+// 那是 course/mentor 审核的词),见 002 迁移的 CHECK。
+const JOIN_REQUEST_STATUSES = ['pending', 'accepted', 'rejected'] as const;
 
 const card = (p: { slug: string; name: string; tagline: string | null; repo_url: string | null;
                     domain_id: string | null; status: string; created_at: Date;
@@ -115,14 +121,34 @@ async function loadProject(slug: string) {
 }
 
 const projectRoutes: RouteHandler = async (ctx, D) => {
-  const { method, path, seg, body, user } = ctx;
+  const { method, path, seg, body, user, query: qs } = ctx;
 
+  // GET /api/projects?page=&per_page=&domain=
+  // 兄弟键 pagination(分页信息)与 domain_counts(全量领域计数,不被
+  // ?domain= 影响——领域 chip 的"有没有项目"徽标要凭它渲染,只在当前
+  // 页里数会漏掉其他页的项目)。现有消费点只解构 r.projects,新键不破坏它们。
   if (method === 'GET' && path === '/api/projects') {
+    const { page, perPage } = parsePagination(qs);
+    const domain = qs.get('domain');
+    if (domain) {
+      const d = await db.select({ one: sql`1` }).from(domains).where(eq(domains.id, domain));
+      if (!d.length) return D({ error: '未知领域' }, 400);
+    }
+    const where = and(eq(projects.status, 'approved'), domain ? eq(projects.domain_id, domain) : undefined);
+    // count 与列表同 WHERE;两次查询不包事务,行间漂移对偏移分页可接受。
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(projects).where(where);
     const r = await db.select(projectWithOwner).from(projects)
       .innerJoin(users, eq(users.id, projects.owner_id))
-      .where(eq(projects.status, 'approved'))
-      .orderBy(desc(projects.created_at));
-    return D({ projects: r.map(card) });
+      .where(where)
+      .orderBy(desc(projects.created_at), desc(projects.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    // 领域 chip 的计数依赖全量(只在当前页里数,chip 会在数据散到后页时消失):
+    // 每次列表响应附带 domain_counts(全库 approved 计数,不受 ?domain= / 分页影响)。
+    const counts = await db.select({ d: projects.domain_id, n: sql<number>`count(*)::int` })
+      .from(projects).where(eq(projects.status, 'approved')).groupBy(projects.domain_id);
+    const domain_counts = Object.fromEntries(counts.filter(c => c.d).map(c => [c.d as string, c.n]));
+    return D({ projects: r.map(card), domain_counts, pagination: pageMeta(n, page, perPage) });
   }
 
   if (method === 'POST' && path === '/api/projects') {
@@ -353,6 +379,9 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
   }
 
   // ---------- 加入申请:列表,只有 owner 或站长能看 ----------
+  // ?status= 为可选过滤(默认仍全量返回,向后兼容)——此前文档写"服务端不做
+  // status 过滤,调用方自筛",分页改造后详情页的"待处理队列"改走
+  // ?status=pending,语义在 docs/API.md 里同步改写。
   if (method === 'GET' && seg[1] === 'projects' && seg[2] && seg[3] === 'join-requests' && !seg[4]) {
     if (!user) return D({ error: '请先登录' }, 401);
     const p = await loadProject(seg[2]);
@@ -362,6 +391,13 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
       if (p.status !== 'approved') return D({ error: 'not found' }, 404);
       return D({ error: '只有发起人能看申请列表' }, 403);
     }
+    const st = statusesParam(qs, JOIN_REQUEST_STATUSES);
+    if (st === 'invalid') return D({ error: '未知的申请状态' }, 400);
+    const { page, perPage } = parsePagination(qs);
+    const where = and(eq(projectJoinRequests.project_id, p.id),
+                      st.length ? inArray(projectJoinRequests.status, st) : undefined);
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(projectJoinRequests).where(where);
     const r = await db.select({
       id: projectJoinRequests.id, message: projectJoinRequests.message,
       status: projectJoinRequests.status, created_at: projectJoinRequests.created_at,
@@ -369,9 +405,10 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
       username: users.username, display_name: users.display_name,
     }).from(projectJoinRequests)
       .innerJoin(users, eq(users.id, projectJoinRequests.user_id))
-      .where(eq(projectJoinRequests.project_id, p.id))
-      .orderBy(desc(projectJoinRequests.created_at));
-    return D({ requests: r });
+      .where(where)
+      .orderBy(desc(projectJoinRequests.created_at), desc(projectJoinRequests.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    return D({ requests: r, pagination: pageMeta(n, page, perPage) });
   }
 
   // ---------- 加入申请:处理(accept/reject),只有该项目 owner 或站长 ----------
@@ -418,11 +455,16 @@ const projectRoutes: RouteHandler = async (ctx, D) => {
   }
 
   if (method === 'GET' && path === '/api/admin/projects/pending') {
+    const { page, perPage } = parsePagination(qs);
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(projects).where(eq(projects.status, 'pending'));
     const r = await db.select(projectWithOwner).from(projects)
       .innerJoin(users, eq(users.id, projects.owner_id))
       .where(eq(projects.status, 'pending'))
-      .orderBy(asc(projects.created_at));
-    return D({ projects: r.map(p => ({ ...card(p), id: p.id, description: p.description })) });
+      .orderBy(asc(projects.created_at), asc(projects.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    return D({ projects: r.map(p => ({ ...card(p), id: p.id, description: p.description })),
+               pagination: pageMeta(n, page, perPage) });
   }
 
   if (method === 'POST' && seg[1] === 'admin' && seg[2] === 'projects' && seg[3] && seg[4] === 'review') {

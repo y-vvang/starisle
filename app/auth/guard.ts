@@ -39,6 +39,7 @@ export const PUBLIC_ROUTES: string[] = [
   // 导师目录与指导申请。撤回刻意写成 POST .../:id/withdraw 而不是
   // DELETE /api/mentor-requests/:id —— 后者的通配符落在末段,会再加一条高危规则。
   'GET /api/mentors', 'GET /api/mentors/:slug',
+  'GET /api/mentor-courses',
   'POST /api/mentors/:slug/requests',
   'GET /api/my/mentor-requests', 'POST /api/mentor-requests/:id/withdraw',
   'GET /api/partners',

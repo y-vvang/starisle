@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/pool';
 import { projects, projectMembers, users } from '../db/schema';
+import { parsePagination, pageMeta } from '../lib/pagination';
 import { destroyUserSessions } from '../auth/session';
 import { notify } from './notifications';
 import { str } from '../lib/str';
@@ -12,14 +13,20 @@ const card = (u: { id: number; username: string; display_name: string;
      bio: u.bio, repo_url: u.repo_url, created_at: u.created_at });
 
 const userRoutes: RouteHandler = async (ctx, D) => {
-  const { method, path, seg, body } = ctx;
+  const { method, path, seg, body, query: qs } = ctx;
 
+  // GET /api/members?page=&per_page=
   if (method === 'GET' && path === '/api/members') {
+    const { page, perPage } = parsePagination(qs);
+    const where = eq(users.status, 'approved');
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users).where(where);
     const r = await db.select({
       id: users.id, username: users.username, display_name: users.display_name,
       bio: users.bio, repo_url: users.repo_url, created_at: users.created_at,
-    }).from(users).where(eq(users.status, 'approved')).orderBy(desc(users.created_at));
-    return D({ members: r.map(card) });
+    }).from(users).where(where)
+      .orderBy(desc(users.created_at), desc(users.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    return D({ members: r.map(card), pagination: pageMeta(n, page, perPage) });
   }
 
   if (method === 'GET' && seg[1] === 'members' && seg[2] && !seg[3]) {
@@ -38,13 +45,19 @@ const userRoutes: RouteHandler = async (ctx, D) => {
     return D({ member: card(u), projects: pj });
   }
 
+  // GET /api/admin/users/pending?page=&per_page=
   if (method === 'GET' && path === '/api/admin/users/pending') {
+    const { page, perPage } = parsePagination(qs);
+    const where = eq(users.status, 'pending');
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users).where(where);
     const r = await db.select({
       id: users.id, username: users.username, display_name: users.display_name,
       email: users.email, repo_url: users.repo_url, apply_note: users.apply_note,
       created_at: users.created_at,
-    }).from(users).where(eq(users.status, 'pending')).orderBy(asc(users.created_at));
-    return D({ users: r });
+    }).from(users).where(where)
+      .orderBy(asc(users.created_at), asc(users.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    return D({ users: r, pagination: pageMeta(n, page, perPage) });
   }
 
   if (method === 'POST' && seg[1] === 'admin' && seg[2] === 'users' && seg[3] && seg[4] === 'review') {

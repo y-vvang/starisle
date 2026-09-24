@@ -5,7 +5,8 @@ import type { RouteHandler } from './types';
 
 const domainRoutes: RouteHandler = async (ctx, D) => {
   if (ctx.method === 'GET' && ctx.path === '/api/domains') {
-    const r = await db.select().from(domains).orderBy(domains.sort);
+    // sort 非唯一,补 id tiebreaker 保证排序确定(非分页需要,但同样受益)。
+    const r = await db.select().from(domains).orderBy(domains.sort, domains.id);
     return D({ domains: r });
   }
   if (ctx.method === 'GET' && ctx.path === '/api/stats') {

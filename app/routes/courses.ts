@@ -1,10 +1,15 @@
-import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, ilike, inArray, or, sql } from 'drizzle-orm';
 import { db, tx, pgCode } from '../db/pool';
 import { courses, courseEnrollments, courseLessons, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
+import { parsePagination, pageMeta } from '../lib/pagination';
+import { escapeLike } from '../lib/like';
+import { statusesParam } from '../lib/statuses';
 import { notify } from './notifications';
 import { str } from '../lib/str';
 import type { RouteHandler } from './types';
+
+const COURSE_ENROLLMENT_STATUSES = ['pending', 'approved', 'rejected'] as const;
 
 const TRACKS = new Set(['math', 'literacy', 'extension', 'application']);
 const STATUSES = new Set(['draft', 'pending', 'published', 'archived']);
@@ -92,14 +97,27 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
 
   // ============ 公开 / 成员 ============
 
-  // GET /api/courses?track=
+  // GET /api/courses?track=&q=&page=&per_page=
+  // ?q= 是 CoursesPage 本地搜索的服务端化:覆盖与前端原先本地过滤相同的四字段
+  // (title/subject/summary/instructors),%/_ 由 escapeLike 转义,防通配符注入。
   if (method === 'GET' && seg[1] === 'courses' && !seg[2]) {
     const track = qs.get('track');
     if (track && !TRACKS.has(track)) return D({ error: '未知的课程分类' }, 400);
+    const rawQ = str(qs.get('q') ?? '', 100);
+    const kw = rawQ ? `%${escapeLike(rawQ)}%` : null;
+    const { page, perPage } = parsePagination(qs);
+    const where = and(
+      eq(courses.status, 'published'),
+      track ? eq(courses.track, track) : undefined,
+      kw ? or(ilike(courses.title, kw), ilike(courses.subject, kw),
+              ilike(courses.summary, kw), ilike(courses.instructors, kw)) : undefined,
+    );
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(courses).where(where);
     const r = await db.select(courseWithCount).from(courses)
-      .where(and(eq(courses.status, 'published'), track ? eq(courses.track, track) : undefined))
-      .orderBy(desc(courses.featured), desc(courses.created_at));
-    return D({ courses: r.map(card) });
+      .where(where)
+      .orderBy(desc(courses.featured), desc(courses.created_at), desc(courses.id))
+      .limit(perPage).offset((page - 1) * perPage);
+    return D({ courses: r.map(card), pagination: pageMeta(n, page, perPage) });
   }
 
   // GET /api/courses/:slug
@@ -156,9 +174,13 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     }
   }
 
-  // GET /api/my/courses
+  // GET /api/my/courses?page=&per_page=
   if (method === 'GET' && seg[1] === 'my' && seg[2] === 'courses' && !seg[3]) {
     if (!user) return D({ error: '请先登录' }, 401);
+    const { page, perPage } = parsePagination(qs);
+    const where = eq(courseEnrollments.user_id, user.id);
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(courseEnrollments).where(where);
     const r = await db.select({
       id: courses.id, slug: courses.slug, title: courses.title, subject: courses.subject,
       track: courses.track, summary: courses.summary, instructors: courses.instructors,
@@ -169,13 +191,14 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
       lesson_count: sql<number>`(SELECT count(*)::int FROM course_lessons l WHERE l.course_id = ${courses.id})`,
     }).from(courseEnrollments)
       .innerJoin(courses, eq(courses.id, courseEnrollments.course_id))
-      .where(eq(courseEnrollments.user_id, user.id))
-      .orderBy(desc(courseEnrollments.created_at));
+      .where(where)
+      .orderBy(desc(courseEnrollments.created_at), desc(courseEnrollments.id))
+      .limit(perPage).offset((page - 1) * perPage);
     return D({ courses: r.map(row => ({
       ...card(row), lesson_count: row.lesson_count,
       enrollment_status: row.enrollment_status,
       enrollment_created_at: row.enrollment_created_at,
-    })) });
+    })), pagination: pageMeta(n, page, perPage) });
   }
 
   // ============ 站长(路径已被 guard 的 /api/admin/ 前缀拦成后台,这里不再重复查 role) ============
@@ -331,14 +354,19 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     return done ? D({ ok: true }) : D({ error: 'not found' }, 404);
   }
 
-  // GET /api/admin/course-enrollments?status=
+  // GET /api/admin/course-enrollments?status=&page=&per_page=
+  // ?status= 升级为逗号分隔多值(单值仍然兼容,前端各处传单个状态不变)。
   if (method === 'GET' && seg[2] === 'course-enrollments' && !seg[3]) {
-    const status = qs.get('status');
-    if (status && !['pending', 'approved', 'rejected'].includes(status)) {
-      return D({ error: '未知的申请状态' }, 400);
-    }
+    const st = statusesParam(qs, COURSE_ENROLLMENT_STATUSES);
+    if (st === 'invalid') return D({ error: '未知的申请状态' }, 400);
+    const { page, perPage } = parsePagination(qs);
+    // ANY(数组) 的绑定要交给 inArray(drizzle 会展开成 IN (listed));
+    // 直接把 JS 数组绑成 $1 会被 pg 当标量字符串,array_in 解析失败。
+    const where = st.length ? inArray(courseEnrollments.status, st) : undefined;
     // 逐列点名,不 join 邮箱 —— 站长审报名不需要申请人邮箱,别让这个端点变成第二个
     // 会吐他人邮箱的接口(目前唯一一个是 GET /api/admin/users/pending)。
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(courseEnrollments).where(where);
     const r = await db.select({
       id: courseEnrollments.id, status: courseEnrollments.status,
       message: courseEnrollments.message, created_at: courseEnrollments.created_at,
@@ -347,13 +375,14 @@ const courseRoutes: RouteHandler = async (ctx, D) => {
     }).from(courseEnrollments)
       .innerJoin(courses, eq(courses.id, courseEnrollments.course_id))
       .innerJoin(users, eq(users.id, courseEnrollments.user_id))
-      .where(status ? eq(courseEnrollments.status, status) : undefined)
-      .orderBy(desc(courseEnrollments.created_at));
+      .where(where)
+      .orderBy(desc(courseEnrollments.created_at), desc(courseEnrollments.id))
+      .limit(perPage).offset((page - 1) * perPage);
     return D({ requests: r.map(x => ({
       id: x.id, status: x.status, message: x.message, created_at: x.created_at,
       course: { slug: x.course_slug, title: x.course_title },
       user: { username: x.username, display_name: x.display_name },
-    })) });
+    })), pagination: pageMeta(n, page, perPage) });
   }
 
   // POST /api/admin/course-enrollments/:id/review

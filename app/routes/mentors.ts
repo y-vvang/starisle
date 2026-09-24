@@ -1,10 +1,14 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db, tx, pgCode } from '../db/pool';
 import { mentorCourses, mentorRequests, mentors, partnerOrgs, users } from '../db/schema';
 import { uniqueSlug } from '../lib/slug';
+import { parsePagination, pageMeta } from '../lib/pagination';
+import { statusesParam } from '../lib/statuses';
 import { notify } from './notifications';
 import { str } from '../lib/str';
 import type { RouteHandler } from './types';
+
+const MENTOR_REQUEST_STATUSES = ['pending', 'approved', 'rejected', 'completed'] as const;
 
 const HOURS = new Set(['<2h', '2-4h', '4-6h', '>6h']);
 const LEVELS = new Set(['初级', '中级', '高级']);
@@ -67,18 +71,36 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
 
   // ============ 公开 / 成员 ============
 
-  // GET /api/mentors?course=
+  // GET /api/mentors?course=&page=&per_page=
   if (method === 'GET' && seg[1] === 'mentors' && !seg[2]) {
     const course = qs.get('course');
+    const { page, perPage } = parsePagination(qs);
+    // 筛选下拉改为独立端点(GET /api/mentor-courses)后,不再需要"未筛选结果
+    // 推导选项"——第一页在任何筛选下都代表得了全部项目的课程标题来源。
+    const where = and(
+      eq(mentors.status, 'active'),
+      // EXISTS 子查询保持原样(比 builder 的半连接嵌套更直白)
+      course ? sql`EXISTS (SELECT 1 FROM mentor_courses c WHERE c.mentor_id = ${mentors.id} AND c.title = ${course})` : undefined,
+    );
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(mentors)
+      .where(and(eq(mentors.status, 'active'),
+                 course ? sql`EXISTS (SELECT 1 FROM mentor_courses c WHERE c.mentor_id = ${mentors.id} AND c.title = ${course})` : undefined));
     const r = await db.select().from(mentors)
-      .where(and(
-        eq(mentors.status, 'active'),
-        // EXISTS 子查询保持原样(比 builder 的半连接嵌套更直白)
-        course ? sql`EXISTS (SELECT 1 FROM mentor_courses c WHERE c.mentor_id = ${mentors.id} AND c.title = ${course})` : undefined,
-      ))
-      .orderBy(mentors.sort, mentors.id);
+      .where(where)
+      .orderBy(mentors.sort, mentors.id)
+      .limit(perPage).offset((page - 1) * perPage);
     const map = await coursesOf(r.map(m => m.id));
-    return D({ mentors: r.map(m => publicMentor(m, map.get(String(m.id)))) });
+    return D({ mentors: r.map(m => publicMentor(m, map.get(String(m.id)))), pagination: pageMeta(n, page, perPage) });
+  }
+
+  // GET /api/mentor-courses —— 全部导师课程标题的 distinct 清单。
+  // 为 MentorsPage 的筛选下拉服务:原先从「未筛选」的导师列表推导,分页后第一页
+  // 不再代表全部,选项会缺失。两段字面量路径,不撞白名单通配符(见 guard 钉桩测试)。
+  if (method === 'GET' && seg[1] === 'mentor-courses' && !seg[2]) {
+    const r = await db.selectDistinct({ title: mentorCourses.title })
+      .from(mentorCourses)
+      .orderBy(asc(mentorCourses.title));
+    return D({ courses: r.map(x => x.title) });
   }
 
   // GET /api/mentors/:slug
@@ -257,14 +279,18 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     return done ? D({ ok: true }) : D({ error: 'not found' }, 404);
   }
 
-  // GET /api/admin/mentor-requests?status=
+  // GET /api/admin/mentor-requests?status=&page=&per_page=
+  // ?status= 升级为逗号分隔多值;留痕视图请求 rejected,completed 两个状态。
   if (method === 'GET' && seg[2] === 'mentor-requests' && !seg[3]) {
-    const status = qs.get('status');
-    if (status && !['pending', 'approved', 'rejected', 'completed'].includes(status)) {
-      return D({ error: '未知的申请状态' }, 400);
-    }
+    const st = statusesParam(qs, MENTOR_REQUEST_STATUSES);
+    if (st === 'invalid') return D({ error: '未知的申请状态' }, 400);
+    const { page, perPage } = parsePagination(qs);
+    // ANY(数组) 展开成 inArray(见 courses.ts 同处的注释)
+    const where = st.length ? inArray(mentorRequests.status, st) : undefined;
     // 只有这一处会 SELECT 导师的 contact_email —— 站长要靠它在站外联系导师。
     // 申请人侧只给 username/display_name,不 join 邮箱:站长审这个不需要申请人邮箱。
+    const [{ n }] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(mentorRequests).where(where);
     const r = await db.select({
       id: mentorRequests.id, status: mentorRequests.status,
       interest: mentorRequests.interest, background: mentorRequests.background,
@@ -275,15 +301,16 @@ const mentorRoutes: RouteHandler = async (ctx, D) => {
     }).from(mentorRequests)
       .innerJoin(mentors, eq(mentors.id, mentorRequests.mentor_id))
       .innerJoin(users, eq(users.id, mentorRequests.user_id))
-      .where(status ? eq(mentorRequests.status, status) : undefined)
-      .orderBy(desc(mentorRequests.created_at));
+      .where(where)
+      .orderBy(desc(mentorRequests.created_at), desc(mentorRequests.id))
+      .limit(perPage).offset((page - 1) * perPage);
     return D({ requests: r.map(x => ({
       id: x.id, status: x.status, interest: x.interest, background: x.background,
       questions: x.questions, weekly_hours: x.weekly_hours, review_note: x.review_note,
       created_at: x.created_at,
       mentor: { name: x.mentor_name, contact_email: x.mentor_email },
       user: { username: x.username, display_name: x.display_name },
-    })) });
+    })), pagination: pageMeta(n, page, perPage) });
   }
 
   // POST /api/admin/mentor-requests/:id/review
