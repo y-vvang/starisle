@@ -1,11 +1,11 @@
-<script setup>
+<script setup lang="ts">
 import { inject, onMounted, ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const shared = inject('shared', { dname: {}, dcolor: {} });
-const pending = ref([]);
-const busy = ref('');
+const shared = inject<{ dname: Record<string, string>; dcolor: Record<string, string> }>('shared', { dname: {}, dcolor: {} });
+const pending = ref<any[]>([]);
+const busy = ref<string | number>('');
 
 async function load() {
   const r = await api('/admin/projects/pending');
@@ -13,7 +13,7 @@ async function load() {
 }
 onMounted(load);
 
-async function review(pj, decision) {
+async function review(pj: any, decision: string) {
   busy.value = pj.id;
   const r = await post(`/admin/projects/${pj.id}/review`, { decision, note: decision === 'reject' ? '内容不完整,请补充后重投' : '' });
   busy.value = '';

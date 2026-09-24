@@ -1,6 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { store, openProject, actPublishProject } from '../store';
+import type { ProjectCard } from '../store';
 import { STATUS, toast } from '../../lib/api';
 import { t } from '../../lib/i18n';
 import Icon from '../../components/Icon.vue';
@@ -11,21 +12,21 @@ const showPub = ref(false);
 const busy = ref(false);
 
 // 状态标签(基于真实生命周期 + 招募中缺口)
-const STATUS_TABS = [
+const STATUS_TABS: [string, string][] = [
   ['', '全部'],
   ['thriving', '存活 90 天+'],
   ['active', '活跃'],
   ['incubating', '孵化中'],
   ['recruit', '招募中'],
 ];
-function matchStatus(p) {
+function matchStatus(p: ProjectCard): boolean {
   if (!sf.value) return true;
-  if (sf.value === 'recruit') return p.gaps && p.gaps.length;
+  if (sf.value === 'recruit') return !!(p.gaps && p.gaps.length);
   return p.status === sf.value;
 }
 const list = computed(() => store.projects.filter(p => matchStatus(p) && (!df.value || p.domain === df.value)));
-const countStatus = s => store.projects.filter(p => s === 'recruit' ? (p.gaps && p.gaps.length) : p.status === s).length;
-const countDomain = d => store.projects.filter(p => p.domain === d).length;
+const countStatus = (s: string) => store.projects.filter(p => s === 'recruit' ? !!(p.gaps && p.gaps.length) : p.status === s).length;
+const countDomain = (d: string) => store.projects.filter(p => p.domain === d).length;
 
 const pf = reactive({ name: '', domain: 'agent', tagline: '', desc: '', repo: '', stack: '', gap: '' });
 async function publish() {

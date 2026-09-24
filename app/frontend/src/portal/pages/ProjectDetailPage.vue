@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import {
   store, openMember, requireLogin,
@@ -9,18 +9,20 @@ import { router, go } from '../../lib/router';
 import { api, ago, STATUS, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-// 海报按字符数卡在服务端(app/routes/projects.js 的 POSTER_MAX_CHARS),
+// 海报按字符数卡在服务端(app/routes/projects.ts 的 POSTER_MAX_CHARS),
 // 700,000 字符的 data URI ≈ 512KB 解码后的原图。这里抄同一个数字,只是为了
 // 能在真正发请求之前就把"太大"这件事说清楚,而不是让用户等一个 400 回来。
 const POSTER_MAX_CHARS = 700_000;
 
-const p = ref(null);
+// adapt() 的产物是"真实详情 + 旧壳占位字段"的混合形状,字段集开放
+// (见下方 adapt 注释),刻意用 any 承载;p.error 分支也在这个 ref 里。
+const p = ref<any>(null);
 const loading = ref(true);
 const followBusy = ref(false);
 const joinBusy = ref(false);
 const posterBusy = ref(false);
-const joinRequests = ref([]);
-const decisionBusy = ref('');
+const joinRequests = ref<any[]>([]);
+const decisionBusy = ref<string | number>('');
 const col = () => (p.value ? store.dcolor[p.value.domain] : '#7db4ff');
 
 // GET /projects/:slug 返回的 owner 字段只有 {username,display_name},没有 id,
@@ -37,12 +39,12 @@ const isOwnerOrAdmin = computed(() => isOwner.value || isAdmin.value);
 // 没有对应后端字段的(platform/honors/activity/demo/work/stack/milestones/
 // gapsDetail/giteeContent/events)一律给安全的空/占位默认值——模板里这些字段
 // 大多已有 v-if 保护,会自动收起对应区块,不编造假数据。
-function adapt(proj, members) {
+function adapt(proj: any, members: any[]) {
   return {
     ...proj,
     domain: proj.domain_id,
     platform: 'Gitee',
-    honors: [],
+    honors: [] as string[],
     activity: 0,
     demo: null,
     problem: proj.description || '',
@@ -52,14 +54,14 @@ function adapt(proj, members) {
     stack: proj.stack || [],
     milestones: proj.milestones || [],
     // 模板里的 candidates 是旧人才匹配功能的残留(已删),给空数组让 v-if 收起来。
-    gapsDetail: (proj.gaps || []).map(g => ({ skill: g.skill, note: g.note, candidates: [] })),
-    giteeContent: [],
-    events: [],
+    gapsDetail: (proj.gaps || []).map((g: any) => ({ skill: g.skill, note: g.note, candidates: [] as unknown[] })),
+    giteeContent: [] as unknown[],
+    events: [] as unknown[],
     members: (members || []).map(m => ({ id: m.username, star: m.display_name || m.username, role: m.role })),
   };
 }
 
-async function load(id) {
+async function load(id: string) {
   if (!id) return;
   loading.value = true;
   const r = await api('/projects/' + id);
@@ -71,7 +73,7 @@ async function load(id) {
     // 不是待办队列。此前直接整份渲染,于是已经处理过的申请刷新页面后会重新冒出来,
     // 还带着能点的通过/拒绝 —— 点下去只会拿到 409。这里只留待处理的。
     const all = await fetchJoinRequests(p.value.slug);
-    joinRequests.value = (all || []).filter(x => x.status === 'pending');
+    joinRequests.value = (all || []).filter((x: any) => x.status === 'pending');
   }
 }
 watch(() => router.param, load, { immediate: true });
@@ -111,9 +113,10 @@ async function submitJoin() {
   toast(r.note || '已提交加入申请 ✦');
 }
 
-function onPosterChange(e) {
-  const f = e.target.files && e.target.files[0];
-  e.target.value = ''; // 允许下次重选同一个文件
+function onPosterChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const f = input.files && input.files[0];
+  input.value = ''; // 允许下次重选同一个文件
   if (!f) return;
   const reader = new FileReader();
   reader.onload = async () => {
@@ -143,13 +146,13 @@ async function removePoster() {
   toast('已移除海报');
 }
 
-async function decide(item, decision) {
+async function decide(item: any, decision: string) {
   if (decisionBusy.value) return;
   decisionBusy.value = item.id;
   const r = await actJoinRequestDecision(item.id, decision);
   decisionBusy.value = '';
   if (!r || r.error) { toast((r && r.error) || '操作失败'); return; }
-  joinRequests.value = joinRequests.value.filter(x => x.id !== item.id);
+  joinRequests.value = joinRequests.value.filter((x: any) => x.id !== item.id);
   toast(decision === 'accept' ? `已通过「${item.display_name || item.username}」的申请 ✦` : '已拒绝申请');
   if (decision === 'accept') await refreshProject();
 }

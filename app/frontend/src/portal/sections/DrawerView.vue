@@ -1,27 +1,28 @@
-<script setup>
+<script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import { store, openMember, openProject, closeDrawer, actFollow } from '../store';
+import type { DrawerMember } from '../store';
 import { ago, tzLabel, STAGE, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
 const d = computed(() => store.drawer);
 // 关注(真实关系)
-const followState = reactive({}); // id -> bool 覆盖(本会话)
+const followState = reactive<Record<string, boolean | undefined>>({}); // id -> bool 覆盖(本会话)
 const followBusy = ref(false);
-function iFollow(data) {
-  if (followState[data.id] !== undefined) return followState[data.id];
+function iFollow(data: DrawerMember): boolean {
+  if (followState[data.id] !== undefined) return !!followState[data.id];
   return (data.followers || []).some(f => f.id === (store.persona && store.persona.ref));
 }
-function followerCount(data) {
+function followerCount(data: DrawerMember): number {
   const base = data.followerCount || 0;
   const ov = followState[data.id];
   if (ov === undefined) return base;
   const was = (data.followers || []).some(f => f.id === (store.persona && store.persona.ref));
   return base + (ov ? 1 : 0) - (was ? 1 : 0);
 }
-async function toggleFollow(data) {
+async function toggleFollow(data: DrawerMember) {
   followBusy.value = true;
-  const r = await actFollow(data.id);
+  const r = await actFollow();
   followBusy.value = false;
   if (r && !r.error) { followState[data.id] = r.following; toast(r.following ? '已关注 ✦' : '已取消关注'); }
   else toast((r && r.error) || '操作失败');
@@ -32,7 +33,7 @@ const col = computed(() => {
   return store.dcolor[x.data.interests[0]];
 });
 
-const STAGE_DEFS = [
+const STAGE_DEFS: [string, string][] = [
   ['星尘 Stardust', '通过准入 + 完成档案'],
   ['星云 Nebula', '≥1 次有效贡献 · 加入 ≥1 个项目'],
   ['超新星 Supernova', '高权重贡献 + 核心维护存活 90 天+ 的项目'],

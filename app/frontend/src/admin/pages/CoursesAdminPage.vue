@@ -1,25 +1,30 @@
-<script setup>
+<script setup lang="ts">
 // 后台 · 课程管理:课程库(建/改/发布/下架)、课节编排、学习申请审批。
 import { ref, computed, onMounted } from 'vue';
 import { api, post, patch, del, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const TRACKS = { math: '数学基础', literacy: '人工智能通识',
+const TRACKS: Record<string, string> = { math: '数学基础', literacy: '人工智能通识',
                  extension: '学科拓展', application: 'AI 编程与应用' };
-const STATUS = { draft: '草稿', pending: '待审', published: '已发布', archived: '已下架' };
+const STATUS: Record<string, string> = { draft: '草稿', pending: '待审', published: '已发布', archived: '已下架' };
 
 const tab = ref('lib');
-const courses = ref([]);
-const requests = ref([]);
-const lessons = ref([]);
-const sel = ref(null);          // 当前编辑/编排的课程 id
+const courses = ref<any[]>([]);
+const requests = ref<any[]>([]);
+const lessons = ref<any[]>([]);
+const sel = ref<number | null>(null);   // 当前编辑/编排的课程 id
 const busy = ref('');
 const err = ref('');
 
-const blank = () => ({ title: '', track: 'math', subject: '', summary: '', description: '',
+interface CourseForm {
+  title: string; track: string; subject: string; summary: string;
+  description: string; instructors: string; audience: string;
+  total_hours: string; featured: boolean;
+}
+const blank = (): CourseForm => ({ title: '', track: 'math', subject: '', summary: '', description: '',
                        instructors: '', audience: '', total_hours: '', featured: false });
-const f = ref(blank());
-const editing = ref(null);      // null = 新建
+const f = ref<CourseForm>(blank());
+const editing = ref<number | null>(null);      // null = 新建
 
 const pendingCount = computed(() => requests.value.filter(r => r.status === 'pending').length);
 
@@ -31,7 +36,7 @@ async function loadRequests() {
   const r = await api('/admin/course-enrollments');
   requests.value = (r && r.requests) || [];
 }
-async function loadLessons(slug) {
+async function loadLessons(slug: string | null | undefined) {
   if (!slug) { lessons.value = []; return; }
   const r = await api('/courses/' + encodeURIComponent(slug));
   lessons.value = (r && r.lessons) || [];
@@ -41,7 +46,7 @@ onMounted(async () => { await loadCourses(); await loadRequests(); });
 const selCourse = computed(() => courses.value.find(c => c.id === sel.value) || null);
 
 function startNew() { editing.value = null; f.value = blank(); err.value = ''; }
-function startEdit(c) {
+function startEdit(c: any) {
   editing.value = c.id; err.value = '';
   f.value = { title: c.title || '', track: c.track, subject: c.subject || '',
               summary: c.summary || '', description: c.description || '',
@@ -66,7 +71,7 @@ async function save() {
   if (!editing.value) startNew();
 }
 
-async function review(c, decision) {
+async function review(c: any, decision: string) {
   busy.value = 'r' + c.id;
   const r = await post(`/admin/courses/${c.id}/review`, { decision });
   busy.value = '';
@@ -75,7 +80,7 @@ async function review(c, decision) {
   await loadCourses();
 }
 
-async function setStatus(c, status) {
+async function setStatus(c: any, status: string) {
   busy.value = 's' + c.id;
   const r = await patch(`/admin/courses/${c.id}`, { status });
   busy.value = '';
@@ -86,7 +91,7 @@ async function setStatus(c, status) {
 
 // —— 课节 ——
 const lf = ref({ title: '', duration_minutes: '', summary: '' });
-async function pickCourse(id) {
+async function pickCourse(id: number | null) {
   sel.value = id;
   const c = courses.value.find(x => x.id === id);
   await loadLessons(c && c.slug);
@@ -102,21 +107,21 @@ async function addLesson() {
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '添加失败');
   lf.value = { title: '', duration_minutes: '', summary: '' };
-  await loadLessons(selCourse.value.slug);
+  await loadLessons(selCourse.value?.slug);
   await loadCourses();
 }
-async function removeLesson(l) {
+async function removeLesson(l: any) {
   if (!confirm(`删除课节「${l.title}」?`)) return;
   busy.value = 'l' + l.id;
   const r = await del(`/admin/lessons/${l.id}`);
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '删除失败');
-  await loadLessons(selCourse.value.slug);
+  await loadLessons(selCourse.value?.slug);
   await loadCourses();
 }
 // 上下移动:本地交换后把**完整顺序**提交上去(后端只接受一次性的全量顺序,
 // 这样幂等、不会出现中间态)。
-async function move(i, delta) {
+async function move(i: number, delta: number) {
   const j = i + delta;
   if (j < 0 || j >= lessons.value.length) return;
   const ids = lessons.value.map(l => l.id);
@@ -125,11 +130,11 @@ async function move(i, delta) {
   const r = await post(`/admin/courses/${sel.value}/lessons/reorder`, { lesson_ids: ids });
   busy.value = '';
   if (!r || r.error) return toast((r && r.error) || '排序失败');
-  await loadLessons(selCourse.value.slug);
+  await loadLessons(selCourse.value?.slug);
 }
 
 // —— 学习申请 ——
-async function decide(req, decision) {
+async function decide(req: any, decision: string) {
   busy.value = 'e' + req.id;
   const r = await post(`/admin/course-enrollments/${req.id}/review`, { decision });
   busy.value = '';
@@ -215,7 +220,7 @@ async function decide(req, decision) {
     <!-- 课节编排 -->
     <div v-else-if="tab === 'lesson'">
       <div class="form-field ca-pick"><label>选择课程</label>
-        <select :value="sel" @change="pickCourse(Number($event.target.value))">
+        <select :value="sel" @change="pickCourse(Number(($event.target as HTMLInputElement).value))">
           <option :value="null">— 请选择 —</option>
           <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.title }}</option>
         </select></div>

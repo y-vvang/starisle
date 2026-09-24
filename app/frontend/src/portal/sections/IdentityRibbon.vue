@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { store, logout, openLogin } from '../store';
 import { api, post, ago, toast } from '../../lib/api';
@@ -7,10 +7,11 @@ import Icon from '../../components/Icon.vue';
 // 演示身份条(ROLE 映射 / 快捷入口)已随前端重写移除;身份展示现在接的是
 // 真实登录用户(HttpOnly cookie 会话):已登录显示显示名 + 退出登录,
 // 未登录显示一个去登录/申请加入的入口。通知铃铛与面板原样保留。
-const notifs = ref([]);
+interface Notif { id: number; kind: string; title: string; body: string | null; read_at: string | null; created_at: string }
+const notifs = ref<Notif[]>([]);
 const notifOpen = ref(false);
 const unread = computed(() => notifs.value.filter(n => !n.read_at).length);
-const NT_ICON = { account: 'check', project: 'planet' };
+const NT_ICON: Record<string, string> = { account: 'check', project: 'planet' };
 async function loadNotifs() {
   if (!store.user) { notifs.value = []; return; }
   const r = await api('/notifications');

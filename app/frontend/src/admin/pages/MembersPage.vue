@@ -1,11 +1,12 @@
-<script setup>
+<script setup lang="ts">
 import { inject, onMounted, ref } from 'vue';
+import type { Ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const me = inject('me', ref(null));
-const members = ref([]);
-const busy = ref('');
+const me = inject<Ref<any>>('me', ref<any>(null));
+const members = ref<any[]>([]);
+const busy = ref<string | number>('');
 
 async function load() {
   const r = await api('/members');
@@ -13,10 +14,10 @@ async function load() {
 }
 onMounted(load);
 
-// id 是 number:app/db/pool.js 给 bigint(OID 20)注册了 Number 类型解析器,
+// id 是 number:app/db/pool.ts 给 bigint(OID 20)注册了 Number 类型解析器,
 // 每条从 pg 出来的 id 天生就是数字。这里的 me.id === m.id 与 busy === m.id
 // 两边都来自同一批接口响应,同源同类型,直接 === 即可,不要再手工转型。
-async function suspend(m) {
+async function suspend(m: any) {
   if (!confirm(`确认停用「${m.display_name || m.username}」?停用后会立刻踢下线,且不能自行恢复。`)) return;
   busy.value = m.id;
   const r = await post(`/admin/users/${m.id}/suspend`, {});

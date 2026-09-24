@@ -1,19 +1,19 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const pending = ref([]);
-const busy = ref('');
+const pending = ref<any[]>([]);
+const busy = ref<string | number>('');
 async function load() {
   const r = await api('/admin/users/pending');
   pending.value = (r && r.users) || [];
 }
 onMounted(load);
 
-// user.id 是 number(app/db/pool.js 给 bigint/OID 20 注册了 Number 解析器);
+// user.id 是 number(app/db/pool.ts 给 bigint/OID 20 注册了 Number 解析器);
 // busy 与 u.id 同源,直接 === 比较,不需要转型。
-async function review(u, decision) {
+async function review(u: any, decision: string) {
   busy.value = u.id;
   const r = await post(`/admin/users/${u.id}/review`, { decision });
   busy.value = '';

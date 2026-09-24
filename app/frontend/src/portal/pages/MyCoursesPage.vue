@@ -1,22 +1,28 @@
-<script setup>
+<script setup lang="ts">
 // #/my-courses —— 我申请过的课程与状态。
 import { ref, watch } from 'vue';
 import { store, fetchMyCourses, requireLogin, TRACKS } from '../store';
 import { go } from '../../lib/router';
 import Icon from '../../components/Icon.vue';
 
-const list = ref([]);
+// /api/my/courses 的行:course 卡片 + enrollment_status/enrollment_created_at
+interface MyCourse {
+  id: number; slug: string; title: string; summary: string | null;
+  instructors: string | null; lesson_count?: number; track: string;
+  enrollment_status: string; [key: string]: any;
+}
+const list = ref<MyCourse[]>([]);
 const loading = ref(true);
 
 async function load() {
   if (!store.user) { list.value = []; loading.value = false; return; }
   loading.value = true;
-  list.value = await fetchMyCourses();
+  list.value = await fetchMyCourses() as MyCourse[];
   loading.value = false;
 }
 watch(() => store.user, load, { immediate: true });
 
-const LABEL = { pending: '审核中', approved: '可以学习', rejected: '未通过' };
+const LABEL: Record<string, string> = { pending: '审核中', approved: '可以学习', rejected: '未通过' };
 </script>
 
 <template>

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // 后台 · 导师申请审批。
 // 三段:待处理 / 已通过待对接(**只有这里显示导师邮箱**,供站长在站外联系)/ 处理留痕。
 // 申请里没有申请人的姓名、学校、联系方式 —— 本项目不收这些;要联系申请人用注册邮箱。
@@ -6,8 +6,8 @@ import { ref, computed, onMounted } from 'vue';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const list = ref([]);
-const busy = ref('');
+const list = ref<any[]>([]);
+const busy = ref<string | number>('');
 
 async function load() {
   const r = await api('/admin/mentor-requests');
@@ -19,7 +19,7 @@ const pending   = computed(() => list.value.filter(x => x.status === 'pending'))
 const approved  = computed(() => list.value.filter(x => x.status === 'approved'));
 const archived  = computed(() => list.value.filter(x => ['rejected', 'completed'].includes(x.status)));
 
-async function act(r, kind) {
+async function act(r: any, kind: string) {
   busy.value = r.id;
   const res = kind === 'complete'
     ? await post(`/admin/mentor-requests/${r.id}/complete`, {})
@@ -30,7 +30,7 @@ async function act(r, kind) {
   await load();
 }
 
-const who = r => r.user.display_name || r.user.username;
+const who = (r: any) => r.user.display_name || r.user.username;
 </script>
 
 <template>

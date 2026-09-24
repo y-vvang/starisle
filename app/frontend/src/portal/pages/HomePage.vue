@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { store, openProject, openMember, TRACKS } from '../store';
 import { go } from '../../lib/router';
@@ -8,7 +8,9 @@ import Icon from '../../components/Icon.vue';
 import HeroSection from '../sections/HeroSection.vue';
 
 // 首页聚合预览:优先用后台「首页配置」选定的推荐项;未配置则按"最新/最热"规则筛精华
-const HOT = {
+// (空壳 strip 的数据源是硬编码空值,排序键 activity/favorites 等恒 undefined → 全为 0,
+//  行为等价:切片取前 N。any 是过渡态宽松,清壳时一并移除。)
+const HOT: Record<string, (a: any, b: any) => number> = {
   projects: (a, b) => (b.activity || 0) - (a.activity || 0),        // 最热:近90天活跃
   courses: (a, b) => (b.favorites || 0) - (a.favorites || 0),       // 最热:收藏
   columns: (a, b) => (b.ts || 0) - (a.ts || 0),                     // 最新:发布时间
@@ -16,7 +18,7 @@ const HOT = {
   students: (a, b) => (b.brightness || 0) - (a.brightness || 0),    // 最亮:近期活跃
   resources: (a, b) => (b.applied || 0) - (a.applied || 0),         // 最热:申请数
 };
-function pick(list, key, n) {
+function pick(list: any[], key: string, n: number): any[] {
   const ids = (store.homeConfig.featured && store.homeConfig.featured[key]) || [];
   if (ids.length) {
     const byId = Object.fromEntries(list.map(x => [x.id, x]));
@@ -29,11 +31,11 @@ function pick(list, key, n) {
 const projects = computed(() => pick(store.projects, 'projects', 4));
 const courses = computed(() => pick(store.courses, 'courses', 4));
 const columns = computed(() => pick(store.highlights.posts || [], 'columns', 3));
-const activities = computed(() => pick(store.gatherings, 'activities', 3));
-const students = computed(() => pick(store.talent, 'students', 4));
+const activities = computed(() => pick(store.gatherings as any[], 'activities', 3));
+const students = computed(() => pick(store.talent as any[], 'students', 4));
 // 资源模块已随前端重写整体下线,新后端没有 /api/resources。这一条不再请求一个
 // 必然 404 的端点,直接留空数组 —— 对应的"资源"strip 会照旧渲染,只是没有卡片。
-const allRes = ref([]);
+const allRes = ref<any[]>([]);
 const resources = computed(() => pick(allRes.value, 'resources', 4));
 
 // 课程的分类维度是 track(数学基础/通识/学科拓展/编程应用),不再是旧的

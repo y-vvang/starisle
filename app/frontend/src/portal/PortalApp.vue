@@ -1,5 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import type { Component } from 'vue';
 import { store, boot, closeDrawer, closeWorkbench, openJoin, openLogin, closeJoin } from './store';
 import { router, go } from '../lib/router';
 import { initCursorLight } from '../lib/api';
@@ -23,7 +24,7 @@ const menuOpen = ref(false);
 
 boot();
 
-const PAGES = {
+const PAGES: Record<string, Component> = {
   '': HomePage,
   projects: ProjectsPage,
   project: ProjectDetailPage,
@@ -33,11 +34,11 @@ const PAGES = {
   mentors: MentorsPage,
 };
 // #/project/:slug/edit 走编辑页;其余第三段一律忽略,落回详情页。
-const pageComp = computed(() =>
+const pageComp = computed<Component>(() =>
   (router.page === 'project' && router.sub === 'edit') ? ProjectEditPage
     : (PAGES[router.page] || HomePage));
 
-const NAV = [
+const NAV: readonly [string, string, string][] = [
   ['projects', '项目', 'Projects'],
   ['courses', '课程', 'Courses'],
   ['mentors', '导师', 'Mentors'],
@@ -45,10 +46,10 @@ const NAV = [
 
 // 深层页面也要点亮对应的一级导航 —— 站在项目详情页时"项目"应该是亮的。
 // (这条顺带修了项目详情/编辑页导航不高亮的老毛病。)
-const NAV_ALIAS = { project: 'projects', course: 'courses', 'my-courses': 'courses' };
-const navActive = id => router.page === id || NAV_ALIAS[router.page] === id;
+const NAV_ALIAS: Record<string, string> = { project: 'projects', course: 'courses', 'my-courses': 'courses' };
+const navActive = (id: string) => router.page === id || NAV_ALIAS[router.page] === id;
 
-function nav(page) { menuOpen.value = false; go(page); }
+function nav(page: string) { menuOpen.value = false; go(page); }
 
 onMounted(() => {
   initCursorLight();

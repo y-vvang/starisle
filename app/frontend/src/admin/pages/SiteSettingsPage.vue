@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { api, patch, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';

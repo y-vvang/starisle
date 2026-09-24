@@ -1,9 +1,10 @@
-<script setup>
+<script setup lang="ts">
 // #/courses —— 课程中心列表。
 // 分类切换走服务端(?track=),关键词搜索在前端本地过滤 —— 列表本来就一次性
 // 返回全部已发布课程,再为搜索多打一趟接口不值。
 import { ref, computed, onMounted } from 'vue';
 import { store, refreshCourses, TRACKS } from '../store';
+import type { CourseCard } from '../store';
 import { go } from '../../lib/router';
 import Icon from '../../components/Icon.vue';
 
@@ -11,7 +12,7 @@ const track = ref('');
 const q = ref('');
 const loading = ref(true);
 
-const TABS = [['', '全部'], ...Object.entries(TRACKS)];
+const TABS: [string, string][] = [['', '全部'], ...Object.entries(TRACKS)];
 
 async function load() {
   loading.value = true;
@@ -20,7 +21,7 @@ async function load() {
 }
 onMounted(load);
 
-function pick(t) { track.value = t; load(); }
+function pick(t: string) { track.value = t; load(); }
 
 const visible = computed(() => {
   const kw = q.value.trim().toLowerCase();
@@ -30,7 +31,7 @@ const visible = computed(() => {
       v => v && String(v).toLowerCase().includes(kw)));
 });
 
-const hours = c => (c.total_hours == null ? '持续更新' : `${c.total_hours} 课时`);
+const hours = (c: CourseCard) => (c.total_hours == null ? '持续更新' : `${c.total_hours} 课时`);
 </script>
 
 <template>

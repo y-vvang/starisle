@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // #/course/:slug —— 课程详情:简介 + 课纲 + 申请学习。
 // 课纲对所有人可见(包括匿名),申请学习需要登录。课件不在本次范围,所以课节只到
 // 标题/摘要/时长为止,没有"开始学习"入口 —— 与其摆一个点不动的按钮,不如不摆。
@@ -7,9 +7,9 @@ import { store, fetchCourse, actEnroll, TRACKS } from '../store';
 import { router, go } from '../../lib/router';
 import Icon from '../../components/Icon.vue';
 
-const c = ref(null);
-const lessons = ref([]);
-const enrollment = ref(null);
+const c = ref<any>(null);
+const lessons = ref<any[]>([]);
+const enrollment = ref<any>(null);
 const loading = ref(true);
 const busy = ref(false);
 
@@ -51,7 +51,7 @@ async function apply() {
   else await load();   // 409 之类:以服务端为准重新拉一次,别让按钮停在错的状态
 }
 
-const dur = l => (l.duration_minutes ? `${l.duration_minutes} 分钟` : '专题');
+const dur = (l: any) => (l.duration_minutes ? `${l.duration_minutes} 分钟` : '专题');
 const hours = () => (c.value.total_hours == null ? '持续更新' : `${c.value.total_hours} 课时`);
 </script>
 

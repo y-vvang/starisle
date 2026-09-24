@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // #/mentors —— 导师目录 + 指导申请 + 合作机构。
 //
 // 申请表只有四个字段,全是"想做什么"而不是"你是谁" —— 平台不收未成年人的真实姓名、
@@ -9,27 +9,27 @@ import { store, requireLogin } from '../store';
 import { api, post, toast } from '../../lib/api';
 import Icon from '../../components/Icon.vue';
 
-const mentors = ref([]);
-const partners = ref([]);
-const myReq = ref({});           // mentor slug -> 我的申请状态
+const mentors = ref<any[]>([]);
+const partners = ref<any[]>([]);
+const myReq = ref<Record<string, any>>({});  // mentor slug -> 我的申请状态
 const course = ref('');
 const cat = ref('中学');
 const loading = ref(true);
 const busy = ref(false);
 
-const applyFor = ref(null);      // 正在申请的导师
+const applyFor = ref<any>(null);  // 正在申请的导师
 const f = ref({ interest: '', background: '', questions: '', weekly_hours: '2-4h' });
 const err = ref('');
 
 const HOURS = ['<2h', '2-4h', '4-6h', '>6h'];
 const CATS = ['中学', '大学', '企业'];
-const LABEL = { pending: '申请审核中', approved: '已通过,等待对接', completed: '已对接', rejected: '未通过' };
+const LABEL: Record<string, string> = { pending: '申请审核中', approved: '已通过,等待对接', completed: '已对接', rejected: '未通过' };
 
 // 选项只在「全部课程」那次结果上算一次,之后固定不变。
 // 若从**已筛选**的 mentors 推导(它是 computed 时的写法),选中「线代」之后列表只剩一位
 // 导师,下拉选项就会跟着塌缩成他教的那三门 —— 其余课从选项里消失,用户必须先切回
 // 「全部课程」才能换一门筛。
-const courseOptions = ref([]);
+const courseOptions = ref<string[]>([]);
 const shownPartners = computed(() => partners.value.filter(p => p.category === cat.value));
 
 async function load() {
@@ -41,7 +41,7 @@ async function load() {
   mentors.value = (ms && ms.mentors) || [];
   partners.value = (ps && ps.partners) || [];
   if (!course.value) {
-    const s = new Set();
+    const s = new Set<string>();
     for (const m of mentors.value) for (const c of (m.courses || [])) s.add(c.title);
     courseOptions.value = [...s].sort();
   }
@@ -60,7 +60,7 @@ async function loadMine() {
 onMounted(load);
 watch(() => store.user, loadMine);
 
-function openApply(m) {
+function openApply(m: any) {
   if (!requireLogin('申请指导')) return;
   err.value = '';
   f.value = { interest: '', background: '', questions: '', weekly_hours: '2-4h' };
@@ -79,7 +79,7 @@ async function submit() {
   await loadMine();
 }
 
-async function withdraw(m) {
+async function withdraw(m: any) {
   const q = myReq.value[m.slug];
   if (!q || q.status !== 'pending') return;
   if (!confirm('撤回这条申请?')) return;

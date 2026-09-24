@@ -1,14 +1,14 @@
-<script setup>
+<script setup lang="ts">
 // 统一 SVG 图标系统 —— 全站唯一的视觉符号来源,替代所有 emoji。
 // stroke 1.7 / currentColor / 24 viewBox,与深空视觉同源。
-const props = defineProps({
-  name: { type: String, required: true },
-  size: { type: String, default: '' }, // '' | 'lg' | 'xl'
-});
+defineProps<{
+  name: string;
+  size?: string; // '' | 'lg' | 'xl'
+}>();
 
-const FILL = new Set(['star', 'dot']);
+const FILL = new Set<string>(['star', 'dot']);
 
-const PATHS = {
+const PATHS: Record<string, string> = {
   // 品牌四角星(fill)
   star: '<path d="M12 2.2 14.3 9.7 21.8 12 14.3 14.3 12 21.8 9.7 14.3 2.2 12 9.7 9.7Z"/>',
   dot: '<circle cx="12" cy="12" r="5"/>',

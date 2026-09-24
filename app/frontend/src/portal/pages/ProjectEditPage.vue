@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // #/project/:slug/edit —— 项目属主(或站长)编辑自己的项目。
 //
 // 后端 PATCH /api/projects/:slug 一直支持属主修改(含未过审项目),此前只是前端
@@ -20,12 +20,16 @@ const busy = ref(false);
 const err = ref('');
 const slug = computed(() => router.param);
 
-const f = ref({
+interface EditForm {
+  name: string; tagline: string; description: string; repo_url: string;
+  domain_id: string; work: string; stackText: string; milestonesText: string; gapsText: string;
+}
+const f = ref<EditForm>({
   name: '', tagline: '', description: '', repo_url: '', domain_id: '',
   work: '', stackText: '', milestonesText: '', gapsText: '',
 });
 
-const isOwnerOrAdmin = p =>
+const isOwnerOrAdmin = (p: any) =>
   !!(store.user && p && p.owner &&
      (store.user.username === p.owner.username || store.user.role === 'admin'));
 

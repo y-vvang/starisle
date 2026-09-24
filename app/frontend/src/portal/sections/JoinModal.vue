@@ -1,17 +1,18 @@
-<script setup>
+<script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import { store, closeJoin, register, login } from '../store';
 import Icon from '../../components/Icon.vue';
 
-const regForm = reactive({ username: '', password: '', display_name: '', email: '', repo_url: '', apply_note: '' });
-const loginForm = reactive({ username: '', password: '' });
+// Record<string, string>:reset() 逐键清空时按下标赋值,字面量键集类型会挡
+const regForm = reactive<Record<string, string>>({ username: '', password: '', display_name: '', email: '', repo_url: '', apply_note: '' });
+const loginForm = reactive<Record<string, string>>({ username: '', password: '' });
 const busy = ref(false);
 const done = ref(false);       // 注册成功态
 const doneNote = ref('');      // 服务端返回的原话
 const errMsg = ref('');        // 真正的错误(密码错/账号被停用等)
 const infoMsg = ref('');       // 平静的提示(审核中),不是错误
 
-function setMode(m) {
+function setMode(m: string) {
   errMsg.value = ''; infoMsg.value = '';
   store.authMode = m;
 }
@@ -19,7 +20,7 @@ function setMode(m) {
 // 弹窗每次重新打开时清掉上一轮遗留的提示,不然切换到另一模式还挂着旧错误。
 watch(() => store.joinOpen, open => { if (open) { errMsg.value = ''; infoMsg.value = ''; } });
 
-function onUsernameInput(f, e) { f.username = e.target.value.toLowerCase(); }
+function onUsernameInput(f: Record<string, string>, e: Event) { f.username = (e.target as HTMLInputElement).value.toLowerCase(); }
 
 async function submitRegister() {
   errMsg.value = ''; infoMsg.value = '';
@@ -45,8 +46,8 @@ async function submitLogin() {
 
 function reset() {
   done.value = false; errMsg.value = ''; infoMsg.value = '';
-  Object.keys(regForm).forEach(k => regForm[k] = '');
-  Object.keys(loginForm).forEach(k => loginForm[k] = '');
+  Object.keys(regForm).forEach(k => { regForm[k] = ''; });
+  Object.keys(loginForm).forEach(k => { loginForm[k] = ''; });
   closeJoin();
 }
 </script>
