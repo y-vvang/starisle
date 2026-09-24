@@ -101,7 +101,7 @@ wait_for_server() {
 
 start_server() {
   : > "$SERVER_LOG"
-  ( DATABASE_URL="$DB_URL" PORT="$PORT" SESSION_SECURE=0 node app/server.js >> "$SERVER_LOG" 2>&1 & echo $! > "$TMP/server.pid" )
+  ( DATABASE_URL="$DB_URL" PORT="$PORT" SESSION_SECURE=0 bun app/server.ts >> "$SERVER_LOG" 2>&1 & echo $! > "$TMP/server.pid" )
   sleep 0.3
   SERVER_PID="$(cat "$TMP/server.pid" 2>/dev/null)"
   wait_for_server
@@ -122,7 +122,7 @@ docker exec starisle-db psql -U starisle -d postgres -v ON_ERROR_STOP=1 -c "CREA
 note "已丢弃并重建 ${DB_NAME}"
 
 section "准备 0/14 · 跑 migration"
-DATABASE_URL="$DB_URL" node app/db/migrate.js || fail "准备 0 —— migration 失败"
+DATABASE_URL="$DB_URL" bun app/db/migrate.ts || fail "准备 0 —— migration 失败"
 
 section "准备 0/14 · 启动服务(端口 $PORT)"
 start_server
@@ -137,7 +137,7 @@ DATABASE_URL="$DB_URL" \
   ADMIN_PASSWORD="StarisleDemo123!" \
   ADMIN_EMAIL="zhanzhang@starisle.demo" \
   ADMIN_DISPLAY_NAME="星屿站长" \
-  node app/bin/create-admin.js > "$ADMIN_OUT" 2>&1
+  bun app/bin/create-admin.ts > "$ADMIN_OUT" 2>&1
 if [ $? -ne 0 ]; then
   cat "$ADMIN_OUT"
   fail "步骤 1 —— create-admin.js 非零退出"

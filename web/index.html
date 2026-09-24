@@ -318,7 +318,7 @@ function domainInfo(id) {
 }
 
 async function loadProjects() {
-  const { body } = await api('/api/projects');
+  const { body } = await api('/api/projects?per_page=100');
   const rows = (body && body.projects) || [];
   const tbody = document.querySelector('#projTable tbody');
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-note">暂无已公开项目</td></tr>'; return; }
@@ -335,7 +335,7 @@ async function loadProjects() {
 }
 
 async function loadMembers() {
-  const { body } = await api('/api/members');
+  const { body } = await api('/api/members?per_page=100');
   const rows = (body && body.members) || [];
   const tbody = document.querySelector('#memberTable tbody');
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty-note">暂无成员</td></tr>'; return; }
@@ -413,7 +413,7 @@ document.getElementById('projForm').addEventListener('submit', async e => {
 });
 
 async function loadPendingUsers() {
-  const { body } = await api('/api/admin/users/pending');
+  const { body } = await api('/api/admin/users/pending?per_page=100');
   const rows = (body && body.users) || [];
   const el = document.getElementById('pendingUsers');
   if (!rows.length) { el.innerHTML = '<div class="empty-note">暂无待审核用户</div>'; return; }
@@ -440,7 +440,7 @@ async function loadPendingUsers() {
 }
 
 async function loadPendingProjects() {
-  const { body } = await api('/api/admin/projects/pending');
+  const { body } = await api('/api/admin/projects/pending?per_page=100');
   const rows = (body && body.projects) || [];
   const el = document.getElementById('pendingProjects');
   if (!rows.length) { el.innerHTML = '<div class="empty-note">暂无待审核项目</div>'; return; }

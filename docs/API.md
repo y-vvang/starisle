@@ -1,18 +1,69 @@
 # API
 
-所有端点都挂在 `/api/*` 下,由 `app/routes/index.js#handle(ctx)` 分发到 `app/routes/*.js` 里的处理函数,返回 `{ status, data }`,`data` 序列化为 JSON。前端同源直连,无 CORS。请求体上限 1MB(`app/server.js` 的 `BODY_LIMIT`),超限直接断连(见该文件注释)。
+所有端点都挂在 `/api/*` 下,由 `app/routes/index.ts#handle(ctx)` 分发到 `app/routes/*.ts` 里的处理函数,返回 `{ status, data }`,`data` 序列化为 JSON。前端同源直连,无 CORS。请求体上限 1MB(`app/server.ts` 的 `BODY_LIMIT`,同时作为 `Bun.serve` 的 `maxRequestBodySize`);带 Content-Length 的超限请求在 HTTP 层被 Bun 直接 413 拒掉(不进 handler),chunked 超限则带着被掐断的 body 进来、按空 body 处理。
 
 约定:
-- `body` 为已解析的 JSON 对象;GET 请求不读 body。非纯对象(数组/null)的 body 会被当空对象 `{}` 处理。
+- `body` 为已解析的 JSON 对象;GET 请求不读 body。非纯对象(数组/null)、解析失败、NUL 剥除后仍非法的 body 一律按空对象 `{}` 处理(`stripNul` 先剥 U+0000)。
 - 登录态经 `starisle_sid` cookie(`HttpOnly`,`SameSite=Lax`;生产环境 `SESSION_SECURE=1` 时加 `Secure`)。
 - 写操作直接改 PostgreSQL,没有全局 `reset` 端点 —— 这不是可复原的演示数据。
 - `HEAD`/`OPTIONS` 对 `/api/*` 一律 `405`(不进路由分发,不经过鉴权守卫)。
+
+## 分页(`app/lib/pagination.ts`)
+
+列表类端点统一支持偏移分页:
+
+- 请求参数:`?page=`(默认 1)与 `?per_page=`(默认 20,夹在 [1,100];`notifications` 默认 50)。非法值回退默认,`per_page` 超上限夹到 100 —— 不报错,给一页合理数据。
+- 响应:保留原有列表键(`projects`/`courses`/…),新增兄弟键 **`pagination`**:`{ page, per_page, total, total_pages }`。
+- **越界页不钳制**:照常查询,返回空列表 + 正确的 total/total_pages(前端据此把页码钳回最后一页)。
+- count 与列表同 WHERE(两次独立查询,不包事务;行间漂移对偏移分页可接受)。
+- 所有分页查询的 ORDER BY 带**唯一 tiebreaker**(`created_at DESC, id DESC` 这类),同一毫秒创建的相邻行不会跨页重复。
+
+支持分页的端点(响应均带 `pagination`):
+
+```
+GET /api/projects                      (+ domain_counts 兄弟键,见下)
+GET /api/courses
+GET /api/mentors
+GET /api/members
+GET /api/notifications                 默认 per_page=50(与历史 LIMIT 50 一致)
+GET /api/my/courses
+GET /api/projects/:slug/join-requests
+GET /api/admin/users/pending
+GET /api/admin/projects/pending
+GET /api/admin/course-enrollments
+GET /api/admin/mentor-requests
+```
+
+**刻意不分页**(决策记录,不要"顺手补齐"):
+
+| 端点 | 理由 |
+|---|---|
+| `GET /api/domains` | 六条枚举 |
+| `GET /api/stats` | 两个标量 |
+| `GET /api/partners` | 机构墙,当前量级有界(33 条种子) |
+| `GET /api/my/mentor-requests` | 单用户自己的申请天然有界;且 MentorsPage 的 loadMine 按 mentor slug **全量**建映射给每张卡打状态标,分页必丢 |
+| `GET /api/admin/courses` | 站长建课量级有界;且后台编辑表单/课节编排的课程下拉需要全量回填 |
+| 详情端点的内嵌列表(项目成员、课纲、`members/:username` 的项目) | 均有界 |
+
+### 列表端点的筛选参数
+
+| 端点 | 参数 | 行为 |
+|---|---|---|
+| `GET /api/projects` | `?domain=` | 按领域过滤;**未知值 400**(对齐 `?track=` 的严格风格)。响应额外带 `domain_counts`:全库 approved 项目的领域计数,**不受 `?domain=`/分页影响**(前端领域 chip 的渲染凭证 —— 只在当前页里数,数据散到后页时 chip 会消失) |
+| `GET /api/courses` | `?track=`、`?q=` | `q` 覆盖 title/subject/summary/instructors 四字段 ILIKE;`%`/`_`/`\` 被 `escapeLike` 转义成字面量,不当代通配符;非法 `track` → 400 |
+| `GET /api/mentors` | `?course=` | 按导师课程标题筛选(EXISTS) |
+| `GET /api/partners` | `?category=` | 严格三档,非法 400 |
+| `GET /api/projects/:slug/join-requests` | `?status=` | **可选过滤,默认仍返回全部状态**(向后兼容;详情页"待处理队列"读法走 `?status=pending`)。白名单是 `pending/accepted/rejected`(**accepted**,课程/导师侧才是 approved);支持逗号分隔多值(`?status=accepted,rejected`);非法值 400 |
+| `GET /api/admin/course-enrollments` | `?status=` | 多值(`pending,approved,rejected`),非法 400 |
+| `GET /api/admin/mentor-requests` | `?status=` | 多值(`pending/approved/rejected/completed`;后台留痕视图请求 `rejected,completed`),非法 400 |
+| `GET /api/admin/courses` | `?status=` | 单值(draft/pending/published/archived) |
+| `GET /api/mentor-courses` | 无 | 全部导师课程标题的 distinct 清单(排序:标题字典序)。给导师页筛选下拉;**匿名可达** |
 
 ---
 
 ## 鉴权:路由分级,默认拒绝
 
-**没有运营口令(`ADMIN_TOKEN`)这回事了。** 鉴权是真实账号 + 服务端会话:注册 → 站长审核 → 登录拿 cookie。路由守卫 `app/auth/guard.js#needsAdmin(method, seg)` 按顺序判定,任何一步命中就短路:
+**没有运营口令(`ADMIN_TOKEN`)这回事了。** 鉴权是真实账号 + 服务端会话:注册 → 站长审核 → 登录拿 cookie。路由守卫 `app/auth/guard.ts#needsAdmin(method, seg)` 按顺序判定,任何一步命中就短路:
 
 ```
 ① seg[1] === 'admin'                     → 后台端点(路径任意位置写 /api/admin/... 就一律后台)
@@ -25,7 +76,7 @@
 
 **这条保证有一个例外,写在这里而不是只写在测试文件的注释里:** 第③步的白名单匹配是"方法 + 段数 + 前缀"这种粗粒度匹配,`PUBLIC_ROUTES` 里**通配符段正好是路径最后一段**的规则(目前四条:`GET /api/projects/:slug`、`PATCH /api/projects/:slug`、`GET /api/members/:username`、`GET /api/courses/:slug`)会把任何**形状凑巧撞上**的未来路由也判成公开,不会走到第④步的默认拒绝。比如将来有人写一个 `GET /api/members/export`,它会被 `GET /api/members/:username` 撞上,悄悄变成公开端点,而不是拿到 401。**因此新加端点如果是站长专属的,必须挂在 `/api/admin/` 前缀下**(第①步在通配符匹配之前就会把它判成后台),不要指望"没登记进白名单就默认拒绝"这条保证能替你挡住这几个通配符形状。
 
-`test/guard.test.js` 最后一条用例把**这类规则的清单本身**钉死了 —— 想加第五条的人会被 CI 拦下,必须在那条测试的注释里写下自己的评估(碰撞面是什么、为什么不用"通配符后再跟一段字面量"的形状、为什么不能不登记),而不是把数组改长了事。课程那条第四规则就是这么加进去的。
+`test/guard.test.ts` 最后一条用例把**这类规则的清单本身**钉死了 —— 想加第五条的人会被 CI 拦下,必须在那条测试的注释里写下自己的评估(碰撞面是什么、为什么不用"通配符后再跟一段字面量"的形状、为什么不能不登记),而不是把数组改长了事。课程那条第四规则就是这么加进去的。
 
 - 未登录 → `401 {"error":"需要站长身份","code":"admin_required"}`
 - 已登录但不是站长 → `403` 同上 body
@@ -38,9 +89,9 @@ review · decide · grant · clear · pending · suspend
 
 路径的**任意一段**只要等于这 6 个词之一,整条请求一律判成后台端点 —— 不看白名单,不管这个词出现在路径的哪一段。这也是为什么:
 
-- 注册时用户名不能是这 6 个词之一(否则 `GET /api/members/:username` 会被误判成后台路由,永久打不开自己的主页,见 `app/routes/auth.js`)。
-- 项目 slug 生成时会避开这 6 个词(`app/lib/slug.js` 的 `RESERVED_WORDS`)。
-- **`POST /api/join-requests/:id/decision` 不叫 `.../decide`。** 处理加入申请的真实权限规则是"该项目 owner 或站长",不是"仅站长";但 `decide` 是保留动词,一旦端点路径里出现这个词,守卫会不看白名单直接判成"仅站长",把项目 owner 也挡在外面,与这条端点本该有的权限矛盾。为了保住"owner 或站长"这个语义,故意把端点名换成不在保留动词表里的 `decision`,而不是去给 `needsAdmin` 为 `decide` 开特例 —— `test/guard.test.js` 里 `isAdmin('POST', '/api/anything/decide')` 那条用例钉死了"保留动词即后台,不依赖有人记得改判定逻辑"这个不变量,不应该为单个端点破例。
+- 注册时用户名不能是这 6 个词之一(否则 `GET /api/members/:username` 会被误判成后台路由,永久打不开自己的主页,见 `app/routes/auth.ts`)。
+- 项目 slug 生成时会避开这 6 个词(`app/lib/slug.ts` 的 `RESERVED_WORDS`)。
+- **`POST /api/join-requests/:id/decision` 不叫 `.../decide`。** 处理加入申请的真实权限规则是"该项目 owner 或站长",不是"仅站长";但 `decide` 是保留动词,一旦端点路径里出现这个词,守卫会不看白名单直接判成"仅站长",把项目 owner 也挡在外面,与这条端点本该有的权限矛盾。为了保住"owner 或站长"这个语义,故意把端点名换成不在保留动词表里的 `decision`,而不是去给 `needsAdmin` 为 `decide` 开特例 —— `test/guard.test.ts` 里 `isAdmin('POST', '/api/anything/decide')` 那条用例钉死了"保留动词即后台,不依赖有人记得改判定逻辑"这个不变量,不应该为单个端点破例。
 
 ### 公开白名单(`PUBLIC_ROUTES`)
 
@@ -64,11 +115,11 @@ PATCH /api/me
 
 任何不在这张表里、也不匹配 `/api/admin/*` 或保留动词的路径,一律走④默认拒绝 —— 匿名或非站长请求会拿到 401/403,而不是先看到 `unknown api`。
 
-**但白名单不是逐条精确匹配,而是形状匹配。** `matchRoute`(`app/auth/guard.js`)只比对三样东西:方法、路径段数、以及规则里所有**不以 `:` 开头**的字面段(按位置逐一对应);`:slug`/`:username`/`:id` 这类是不受约束的通配符,能吃下任意一段。所以一条从未登记过的新路径,只要形状撞上某条白名单规则,就会被判成公开而**不会**走④ —— `GET /api/projects/audit` 撞 `GET /api/projects/:slug`,`GET /api/members/impersonate` 撞 `GET /api/members/:username`,`PATCH /api/projects/feature-flags` 撞 `PATCH /api/projects/:slug`。`test/guard.test.js` 最后一条用例把这三种形状钉死成**已知且刻意接受**的代价(理由见该用例上方"契约④(安全评审确认)"那段注释),不是待修的洞;缓解手段是纪律而不是改 guard:**所有后台专属端点必须挂在 `/api/admin/` 前缀下** —— ①(`seg[1] === 'admin'`)和②(保留动词)都在③的通配符匹配之前 return,通配符碰撞根本没机会发生。
+**但白名单不是逐条精确匹配,而是形状匹配。** `matchRoute`(`app/auth/guard.ts`)只比对三样东西:方法、路径段数、以及规则里所有**不以 `:` 开头**的字面段(按位置逐一对应);`:slug`/`:username`/`:id` 这类是不受约束的通配符,能吃下任意一段。所以一条从未登记过的新路径,只要形状撞上某条白名单规则,就会被判成公开而**不会**走④ —— `GET /api/projects/audit` 撞 `GET /api/projects/:slug`,`GET /api/members/impersonate` 撞 `GET /api/members/:username`,`PATCH /api/projects/feature-flags` 撞 `PATCH /api/projects/:slug`。`test/guard.test.ts` 最后一条用例把这三种形状钉死成**已知且刻意接受**的代价(理由见该用例上方"契约④(安全评审确认)"那段注释),不是待修的洞;缓解手段是纪律而不是改 guard:**所有后台专属端点必须挂在 `/api/admin/` 前缀下** —— ①(`seg[1] === 'admin'`)和②(保留动词)都在③的通配符匹配之前 return,通配符碰撞根本没机会发生。
 
 ---
 
-## `auth` · 账号(`app/routes/auth.js`)
+## `auth` · 账号(`app/routes/auth.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|
@@ -78,21 +129,21 @@ PATCH /api/me
 | GET | `/api/auth/me` | 否 | 未登录返回 `{user:null}`;已登录返回当前用户(含 `email`) |
 | PATCH | `/api/me` | 是 | 改 `display_name`/`bio`/`repo_url`(任意子集);或传 `current_password`+`new_password` 改密码(校验旧密码,新密码 ≥8 位,成功后吊销该用户全部会话并要求重新登录) |
 
-## `domains` / `stats` · 只读元数据(`app/routes/domains.js`)
+## `domains` / `stats` · 只读元数据(`app/routes/domains.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|
 | GET | `/api/domains` | 否 | 全部领域(`id,name,color`),按 `sort` 排序 |
 | GET | `/api/stats` | 否 | `{members, projects}`:已审核通过的用户数与项目数 |
 
-## `settings` · 站点开关(`app/routes/settings.js`)
+## `settings` · 站点开关(`app/routes/settings.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|
 | GET | `/api/settings/public` | 否 | `{registration_open}` |
 | PATCH | `/api/admin/settings` | 站长 | `{registration_open: boolean}`,写入/更新 `settings` 表 |
 
-## `projects` · 项目(`app/routes/projects.js`)
+## `projects` · 项目(`app/routes/projects.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|
@@ -172,7 +223,7 @@ PATCH /api/me
 | POST | `/api/mentor-requests/:id/withdraw` | 是 | 撤回自己的待审申请。不是自己的 `404`(掩护);非 `pending` 的 `409` |
 | GET | `/api/partners` | 否 | 合作机构,可选 `?category=中学\|大学\|企业` |
 
-> 撤回写成 `POST .../:id/withdraw` 而不是 `DELETE /api/mentor-requests/:id`,是为了不让通配符落在路径末段 —— 见守卫一节与 `test/guard.test.js` 的钉桩用例。
+> 撤回写成 `POST .../:id/withdraw` 而不是 `DELETE /api/mentor-requests/:id`,是为了不让通配符落在路径末段 —— 见守卫一节与 `test/guard.test.ts` 的钉桩用例。
 
 ### 站长(全部在 `/api/admin/` 下)
 
@@ -196,17 +247,17 @@ PATCH /api/me
 | GET | `/api/admin/projects/pending` | 站长 | 待审项目列表 |
 | POST | `/api/admin/projects/:id/review` | 站长 | `{decision:'approve'\|'reject', note?}`。通过后项目进入公开列表,并通知发起人 |
 
-## `users` · 成员目录 + 账号审核(`app/routes/users.js`)
+## `users` · 成员目录 + 账号审核(`app/routes/users.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|
 | GET | `/api/members` | 否 | 已通过审核的用户列表(不含 `email`) |
 | GET | `/api/members/:username` | 否 | 成员详情 + 其已过审项目列表 |
-| GET | `/api/admin/users/pending` | 站长 | 待审用户列表,**含 `email`/`apply_note`** —— 这是当前系统里唯一会返回**他人**邮箱的接口,默认拒绝匿名访问就是为了挡住它(`GET /api/auth/me` 与 `POST /api/auth/login` 的响应里也有 `email`,但只是调用者自己的,见 `app/routes/auth.js` 的 `publicUser()`;`/api/members` 系列走 `app/routes/users.js` 的 `card()`,不含 `email`) |
+| GET | `/api/admin/users/pending` | 站长 | 待审用户列表,**含 `email`/`apply_note`** —— 这是当前系统里唯一会返回**他人**邮箱的接口,默认拒绝匿名访问就是为了挡住它(`GET /api/auth/me` 与 `POST /api/auth/login` 的响应里也有 `email`,但只是调用者自己的,见 `app/routes/auth.ts` 的 `publicUser()`;`/api/members` 系列走 `app/routes/users.ts` 的 `card()`,不含 `email`) |
 | POST | `/api/admin/users/:id/review` | 站长 | `{decision:'approve'\|'reject', note?}`,并通知申请人 |
 | POST | `/api/admin/users/:id/suspend` | 站长 | 停用账号并吊销其全部会话。不能停用自己(`400`) |
 
-## `notifications` · 站内通知(`app/routes/notifications.js`)
+## `notifications` · 站内通知(`app/routes/notifications.ts`)
 
 | 方法 | 路径 | 登录 | 说明 |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # 部署 · Deploy
 
-星屿部署到**你自己的服务器**:Docker + Docker Compose,一个 `app` 容器(Node,内含编译好的前端)和一个 `db` 容器(PostgreSQL 17)。**没有 Cloudflare 了** —— Worker、Durable Object、`wrangler.jsonc`、`worker/` 目录都随重写整体删除,下面这份文档不是那份文档的增补,是替换。
+星屿部署到**你自己的服务器**:Docker + Docker Compose,一个 `app` 容器(Bun 运行时,内含编译好的前端)和一个 `db` 容器(PostgreSQL 17)。**没有 Cloudflare 了** —— Worker、Durable Object、`wrangler.jsonc`、`worker/` 目录都随重写整体删除,下面这份文档不是那份文档的增补,是替换。
 
 这份文档是给人读了照着敲命令用的**运行手册**,不是概念性介绍。命令假定在仓库根目录(`docker-compose.yml` 所在目录)执行,shell 是 bash(远程服务器上跑 Linux)。
 
@@ -81,7 +81,7 @@ POSTGRES_PASSWORD=<上面生成的强密码>
 # app 服务连库用的完整连接串。host 必须是 compose 里的服务名 db,不是 localhost——
 # app 和 db 是两个容器,靠 compose 内部网络按服务名互相访问。密码要和上面那行一致。
 # 密码还必须落在 URI 安全字符集里:裸的 / ? # 会把这个串解析坏,app 容器起不来,
-# 而报错完全指不到密码这一步。app/db/pool.js 把 DATABASE_URL 原样交给 new Pool(),
+# 而报错完全指不到密码这一步。app/db/pool.ts 把 DATABASE_URL 原样交给 new Pool(),
 # pg 用 pg-connection-string 解析(内部走 WHATWG new URL())——实测这三个字符一律
 # 抛 Invalid URL;: 和 @ 出现在密码里反而是安全的,会被正确解析进 password。
 # 上面用 openssl rand -hex 正是为了绕开这点:hex 只含 0-9a-f。
@@ -90,7 +90,7 @@ POSTGRES_PASSWORD=<上面生成的强密码>
 # 正确解码回 /,这条路走得通。
 DATABASE_URL=postgres://starisle:<和上面同一个密码>@db:5432/starisle
 
-# 生产必须设成 1:session cookie 才会带 Secure 标记(见 app/server.js 的
+# 生产必须设成 1:session cookie 才会带 Secure 标记(见 app/server.ts 的
 # serializeCookie(),SECURE = process.env.SESSION_SECURE === '1')。
 # 不设就是 0,cookie 没有 Secure——在只有反向代理做了 HTTPS 终止、后端仍是明文
 # HTTP 的部署形态下,Secure 标记本身仍然有意义(防止 cookie 被明文 HTTP 探测/降级
@@ -108,7 +108,7 @@ SESSION_SECURE=1
 docker compose up -d
 ```
 
-这一条命令会:构建 `app` 镜像(多阶段构建,第一阶段在镜像内装前端依赖并 `npm run build`;第二阶段只装生产依赖(仅 `pg`)、拷入后端源码 `app/`,再把第一阶段的前端产物覆盖到 `app/public-dist`,见 `Dockerfile`)、拉起 `db`(等它 healthcheck 通过)、再启动 `app`。`app` 容器的启动命令是 `sh -c "node app/db/migrate.js && node app/server.js"`(见 `Dockerfile` 的 `CMD`)—— **迁移在每次容器启动时自动跑,不需要单独执行一步"迁移"**;`app/db/migrate.js` 是幂等的(已应用过的文件名记在 `schema_migrations` 表里,重跑会跳过)。
+这一条命令会:构建 `app` 镜像(多阶段构建,第一阶段在镜像内装前端依赖并 `bun run build`;第二阶段只装生产依赖(仅 `pg`)、拷入后端源码 `app/`,再把第一阶段的前端产物覆盖到 `app/public-dist`,见 `Dockerfile`)、拉起 `db`(等它 healthcheck 通过)、再启动 `app`。`app` 容器的启动命令是 `sh -c "bun app/db/migrate.ts && bun app/server.ts"`(见 `Dockerfile` 的 `CMD`)—— **迁移在每次容器启动时自动跑,不需要单独执行一步"迁移"**;`app/db/migrate.ts` 是幂等的(已应用过的文件名记在 `schema_migrations` 表里,重跑会跳过)。
 
 ```bash
 # 看一眼迁移和启动日志
@@ -129,7 +129,7 @@ migration 完成
 
 ### 建站长账号
 
-`app/bin/create-admin.js` 平时是交互式问答,但读到 `ADMIN_USER`/`ADMIN_PASSWORD` 这两个环境变量时会走非交互路径(专门为首次开机这种场景设计,见该文件 `main()` 里的分支),`ADMIN_EMAIL` 不给的话会兜底成 `<用户名>@localhost`,`ADMIN_DISPLAY_NAME` 不给的话会兜底成用户名本身:
+`app/bin/create-admin.ts` 平时是交互式问答,但读到 `ADMIN_USER`/`ADMIN_PASSWORD` 这两个环境变量时会走非交互路径(专门为首次开机这种场景设计,见该文件 `main()` 里的分支),`ADMIN_EMAIL` 不给的话会兜底成 `<用户名>@localhost`,`ADMIN_DISPLAY_NAME` 不给的话会兜底成用户名本身:
 
 ```bash
 docker compose exec \
@@ -137,7 +137,7 @@ docker compose exec \
   -e ADMIN_PASSWORD='<一个至少 8 位的强密码,别用示例里这串>' \
   -e ADMIN_EMAIL=owner@your-domain.example \
   -e ADMIN_DISPLAY_NAME='站长的显示名' \
-  app node app/bin/create-admin.js
+  app bun app/bin/create-admin.ts
 ```
 
 成功会打印 `站长账号已创建:zhanzhang(id=1)` 这样一行。这个账号 `role='admin', status='approved'`,直接能登录,不经过注册审核流程。
@@ -184,7 +184,7 @@ $ curl -s -w '\n%{http_code}\n' -X POST http://<host>:4930/api/auth/login \
 
 ### 数据在重启后仍在
 
-不用每次都手动重新验证这一条 —— Task 20 报告(见第 0 节)已经完整跑过"注册用户 → `docker compose restart app` → 再登录,状态仍是同一个 `pending` 用户,不是`用户不存在`"这条链路,证据是同一套 Docker 镜像 + 同一个 `app/db/migrate.js`/`app/server.js` 组合。如果想自己再确认一遍:
+不用每次都手动重新验证这一条 —— Task 20 报告(见第 0 节)已经完整跑过"注册用户 → `docker compose restart app` → 再登录,状态仍是同一个 `pending` 用户,不是`用户不存在`"这条链路,证据是同一套 Docker 镜像 + 同一个 `app/db/migrate.ts`/`app/server.ts` 组合。如果想自己再确认一遍:
 
 ```bash
 docker compose restart app
@@ -202,7 +202,7 @@ curl -s -X POST http://<host>:4930/api/auth/login -H "Content-Type: application/
 
 **这个数据库现在存的是真实用户账号(用户名、密码哈希、真实邮箱地址),不再是可以随便丢弃重来的演示数据。** 备份和访问都要按处理真实个人数据的标准对待:导出的备份文件本身就包含邮箱地址,不能随手传去没有访问控制的地方(公共 issue、聊天群文件、明文对象存储等)。
 
-另外,项目的路演海报是以 base64 data URI 直接内联在 `projects.poster` 这个 text 列里的(`002_project_interactions.sql`,不走对象存储;单张上限 700,000 字符,约 512KB 原图,见 `app/routes/projects.js` 的 `POSTER_MAX_CHARS`)。所以下面这条整库导出的产物里除了邮箱,还包含用户上传的图片内容,体积也会随海报数量线性增长 —— 按含用户上传内容的备份对待,并留意磁盘。
+另外,项目的路演海报是以 base64 data URI 直接内联在 `projects.poster` 这个 text 列里的(`002_project_interactions.sql`,不走对象存储;单张上限 700,000 字符,约 512KB 原图,见 `app/routes/projects.ts` 的 `POSTER_MAX_CHARS`)。所以下面这条整库导出的产物里除了邮箱,还包含用户上传的图片内容,体积也会随海报数量线性增长 —— 按含用户上传内容的备份对待,并留意磁盘。
 
 ```bash
 # 备份(在宿主机上执行,产物落在宿主机,不留在容器里)

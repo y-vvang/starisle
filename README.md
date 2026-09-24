@@ -6,9 +6,9 @@
 
 **面向 AI 青少年的项目协作社区:注册审核、发起项目、审核上线**
 
-[![Backend](https://img.shields.io/badge/backend-Node%20%2B%20PostgreSQL-339933?style=flat-square)](#-技术栈)
-[![Frontend](https://img.shields.io/badge/frontend-Vue%203%20%2B%20Vite-42b883?style=flat-square)](https://vuejs.org/)
-[![Tests](https://img.shields.io/badge/tests-116%20passing-4ade80?style=flat-square)](#-技术栈)
+[![Backend](https://img.shields.io/badge/backend-Bun%20%2B%20TS%20%2B%20PostgreSQL-f9d000?style=flat-square)](#-技术栈)
+[![Frontend](https://img.shields.io/badge/frontend-Vue%203%20TS%20%2B%20Vite-42b883?style=flat-square)](https://vuejs.org/)
+[![Tests](https://img.shields.io/badge/tests-178%20passing-4ade80?style=flat-square)](#-技术栈)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square)](docs/DEPLOY.md)
 
 </div>
@@ -34,18 +34,18 @@
 
 ## ✦ 架构
 
-平台是**有状态**的应用:注册、审核、发起项目、加入项目、关注都会真实改变数据库里的数据。**只有一种运行方式** —— Node 进程 + PostgreSQL,本地这样跑,生产也这样跑(Docker Compose)。没有 Cloudflare、没有 Durable Object、没有"传输无关核心 + 双运行时"这种设计,那一整套连同 `worker/`、`wrangler.jsonc` 已经在重写中删掉了。
+平台是**有状态**的应用:注册、审核、发起项目、加入项目、关注都会真实改变数据库里的数据。**只有一种运行方式** —— Bun 进程 + PostgreSQL,本地这样跑,生产也这样跑(Docker Compose)。没有 Cloudflare、没有 Durable Object、没有"传输无关核心 + 双运行时"这种设计,那一整套连同 `worker/`、`wrangler.jsonc` 已经在重写中删掉了。
 
 ```mermaid
 flowchart TD
     subgraph Browser["浏览器"]
-      Portal["主站 Portal · Vue3<br/>HomePage · ProjectsPage · ProjectDetailPage"]
-      Admin["控制台 Admin · Vue3<br/>4 页:待审用户 · 待审项目 · 成员管理 · 站点设置"]
+      Portal["主站 Portal · Vue3 + TS<br/>首页 · 项目 · 课程 · 导师"]
+      Admin["控制台 Admin · Vue3 + TS<br/>6 页:用户/项目审核 · 课程 · 导师 · 成员 · 设置"]
     end
 
-    Server["app/server.js<br/>Node http · 读 cookie/body → 分发 → 写 JSON"]
-    Guard["app/auth/guard.js<br/>needsAdmin() · 默认拒绝"]
-    Routes["app/routes/*.js<br/>auth · projects · users · notifications · domains · settings"]
+    Server["app/server.ts<br/>Bun.serve · 读 cookie/body → 分发 → 写 JSON"]
+    Guard["app/auth/guard.ts<br/>needsAdmin() · 默认拒绝"]
+    Routes["app/routes/*.ts<br/>auth · projects · courses · mentors · users · notifications · domains · settings"]
     DB[("PostgreSQL<br/>app/db/migrations/*.sql")]
 
     Portal -->|"/api/*"| Server
@@ -76,7 +76,7 @@ flowchart TD
 
 控制台**没有权限组** —— 登录用户要么是站长(`role='admin'`,能进全部四页),要么不是(直接被拦在登录页之后,看不到任何审核页面)。完整端点表见 [`docs/API.md`](docs/API.md),前端页面细节见 [`docs/MODULES.md`](docs/MODULES.md)。
 
-成员目录(`GET /api/members`)和个人主页路由 `#/u/:username` 是后端/路由表里有、前端还没做页面的:`app/frontend/src/lib/router.js` 登记了 `members`/`u` 两个 route,但 `PortalApp.vue` 的页面表没映射它们,访问会静默回落首页;`store.members` 现在拉了,却没有任何组件渲染。
+成员目录(`GET /api/members`)和个人主页路由 `#/u/:username` 是后端/路由表里有、前端还没做页面的:`app/frontend/src/lib/router.ts` 登记了 `members`/`u` 两个 route,但 `PortalApp.vue` 的页面表没映射它们,访问会静默回落首页;`store.members` 现在拉了,却没有任何组件渲染。
 
 <br/>
 
@@ -87,44 +87,41 @@ flowchart TD
 docker run -d --name starisle-db-local -e POSTGRES_DB=starisle -e POSTGRES_USER=starisle \
   -e POSTGRES_PASSWORD=devpass -p 5432:5432 postgres:17-alpine
 
-# 1) 装依赖 + 建库结构
-npm install
+# 1) 装依赖 + 建库结构(需要先装好 Bun:bun.sh)
+bun install
 cp .env.example .env
-# 后端自己不读 .env(生产依赖只有 pg,没有 dotenv;.env 只有 docker compose 会自动读),
-# 本地跑要先把里面的变量导进当前 shell:
-set -a && . ./.env && set +a
-#   Windows PowerShell:$env:DATABASE_URL="postgres://starisle:devpass@localhost:5432/starisle"
-npm run migrate
+# Bun 会自动加载 .env(bun run 的一切命令直接生效),不需要手动导出
+bun run migrate
 
 # 2) 建一个站长账号(交互式问答;也可以用环境变量非交互式,见 docs/DEPLOY.md)
-npm run create-admin
+bun run create-admin
 
-# 3) 构建前端(Vue3 + Vite → app/public-dist)
-cd app/frontend && npm install && npm run build && cd ../..
+# 3) 构建前端(Vue3 + TS + Vite → app/public-dist;含 vue-tsc 类型检查)
+cd app/frontend && bun install && bun run build && cd ../..
 
 # 4) 起后端(默认端口 4870)
-npm start
+bun run start
 #  → 主站 http://localhost:4870/  ·  控制台 http://localhost:4870/admin.html
 ```
 
-第 2、4 步要和第 1 步在同一个 shell 里跑 —— `app/db/pool.js` 直接读进程环境变量里的 `DATABASE_URL`,换个终端就得重新导出。
+换终端也**不需要**重新导出变量 —— Bun 对 `bun run`/`bun app/*.ts` 自动加载 `.env`;只有用裸 `bun` 跑脚本且进程环境已有同名变量时才需要注意优先级。
 
-开发前端时可 `cd app/frontend && npm run dev`(Vite 热更)。跑测试前要先单独建一个测试库并对它跑一次迁移(上面第 0 步只建了 `starisle`):
+开发前端时可 `cd app/frontend && bun run dev`(Vite 热更)。跑测试前要先单独建一个测试库并对它跑一次迁移(上面第 0 步只建了 `starisle`):
 
 ```bash
 docker exec starisle-db-local createdb -U starisle starisle_test
-DATABASE_URL=postgres://starisle:devpass@localhost:5432/starisle_test npm run migrate
+DATABASE_URL=postgres://starisle:devpass@localhost:5432/starisle_test bun run migrate
 #   Windows PowerShell(没有内联环境变量前缀,要分两句):
-#   $env:DATABASE_URL="postgres://starisle:devpass@localhost:5432/starisle_test"; npm run migrate
+#   $env:DATABASE_URL="postgres://starisle:devpass@localhost:5432/starisle_test"; bun run migrate
 ```
 
-之后 `npm test` 即可(116 个测试全在后端)。测试连哪个库由 `TEST_DATABASE_URL` 决定,不设时兜底成上面这个串(见 `test/helpers/db.js`);它同样必须是真正的进程环境变量,写进 `.env` 不会被读到。
+之后 `bun test` 即可(178 个测试全在后端)。测试连哪个库由 `TEST_DATABASE_URL` 决定,不设时兜底成上面这个串(`test/helpers/env.ts` 在任何连库模块加载前覆写 `DATABASE_URL`,双保险:bunfig.toml 的 [test] preload + helpers/db.ts 的首条 import)。
 
 <br/>
 
 ## ✦ 部署(Docker Compose)
 
-`docker compose up -d` 之前必须先把 compose 要用的变量准备好。最省事的是在仓库根目录建一个 `.env`(已被 `.gitignore` 忽略,不会提交),compose 会自动读它做变量插值 —— 直接 `export` 进当前 shell 也一样生效,二选一即可。至少要有 `DATABASE_URL` —— 它是 compose 里唯一没有默认值的变量,不设的话 app 容器会因为 `app/db/pool.js` 拿不到连接串直接退出,再被 `restart: unless-stopped` 反复拉起:
+`docker compose up -d` 之前必须先把 compose 要用的变量准备好。最省事的是在仓库根目录建一个 `.env`(已被 `.gitignore` 忽略,不会提交),compose 会自动读它做变量插值 —— 直接 `export` 进当前 shell 也一样生效,二选一即可。至少要有 `DATABASE_URL` —— 它是 compose 里唯一没有默认值的变量,不设的话 app 容器会因为 `app/db/pool.ts` 拿不到连接串直接退出,再被 `restart: unless-stopped` 反复拉起:
 
 ```dotenv
 POSTGRES_PASSWORD=<强密码>        # 不写就是默认的 devpass
@@ -138,17 +135,17 @@ host 是 compose 服务名 `db` 而不是 `localhost`(`.env.example` 那份是�
 docker compose up -d
 ```
 
-**先建 `.env`,否则起不来。** `docker-compose.yml` 里 `POSTGRES_PASSWORD` 和 `DATABASE_URL` 都没有默认值 —— 光敲上面这一条命令、不先在仓库根目录建一个带这两个变量的 `.env`,`docker compose config` 会直接报错拒绝启动(`POSTGRES_PASSWORD` 缺失),就算绕过去了 `app` 容器也会因为拿不到 `DATABASE_URL` 陷入崩溃重启循环。镜像内多阶段构建(装前端依赖 → `npm run build` → 拷进最终镜像),容器启动时自动跑迁移,然后起服务。生产环境还需要额外设 `SESSION_SECURE=1`,以及在前面接一层反向代理做 TLS 和限流(登录/注册接口没有内置速率限制,必须在反代层做,见下方)—— 完整的、逐条命令验证过的运行手册(密钥怎么生成、建站长账号、验证部署、备份、旧 Cloudflare 部署怎么处理)在 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+**先建 `.env`,否则起不来。** `docker-compose.yml` 里 `POSTGRES_PASSWORD` 和 `DATABASE_URL` 都没有默认值 —— 光敲上面这一条命令、不先在仓库根目录建一个带这两个变量的 `.env`,`docker compose config` 会直接报错拒绝启动(`POSTGRES_PASSWORD` 缺失),就算绕过去了 `app` 容器也会因为拿不到 `DATABASE_URL` 陷入崩溃重启循环。镜像内多阶段构建(装前端依赖 → `bun run build` → 拷进最终镜像),容器启动时自动跑迁移,然后起服务。生产环境还需要额外设 `SESSION_SECURE=1`,以及在前面接一层反向代理做 TLS 和限流(登录/注册接口没有内置速率限制,必须在反代层做,见下方)—— 完整的、逐条命令验证过的运行手册(密钥怎么生成、建站长账号、验证部署、备份、旧 Cloudflare 部署怎么处理)在 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
 
 <br/>
 
 ## ✦ 技术栈
 
-- **前端** — Vue 3(`<script setup>`)+ Vite。主站 3 个页面 + 控制台 4 个页面,极简哈希路由,自绘 SVG 图标,无 emoji。浅色主题(非早期版本的深空暗色)。
-- **后端** — Node 内建 `http`(零 HTTP 框架依赖),生产依赖只有 `pg`。scrypt 密码哈希 + 服务端会话。
-- **数据库** — PostgreSQL 17,两份迁移(`app/db/migrations/`),`npm run migrate` 应用。
-- **测试** — `node --test`,116 个测试(密码哈希、会话、路由守卫、slug、账号、项目、项目互动、HTTP 层、建站长 CLI)。
-- **部署** — Docker 多阶段构建 + Docker Compose(`app` + `db` 两个服务)。
+- **前端** — Vue 3(`<script setup lang="ts">`)+ Vite,`vue-tsc` 类型检查挂在 build 前。主站页面 + 控制台六页(用户/项目审核、课程、导师、成员、站点设置),极简哈希路由,自绘 SVG 图标,无 emoji。浅色主题(非早期版本的深空暗色)。
+- **后端** — Bun(`Bun.serve`,零 HTTP 框架依赖)+ TypeScript,数据层 Drizzle ORM(底层 pg Pool)。scrypt 密码哈希 + 服务端会话。
+- **数据库** — PostgreSQL 17,五份迁移(`app/db/migrations/`),`bun run migrate` 应用;`app/db/schema.ts` 是迁移的类型化镜像(Drizzle)。
+- **测试** — `bun test`,178 个测试(密码哈希、会话、路由守卫、slug、账号、项目、项目互动、HTTP 层、建站长 CLI、分页钉桩)。
+- **部署** — Docker 多阶段构建(oven/bun)+ Docker Compose(`app` + `db` 两个服务)。
 
 <br/>
 
@@ -157,19 +154,21 @@ docker compose up -d
 ```
 starisle/
 ├─ app/
-│  ├─ server.js          # Node HTTP 入口:cookie/body 解析 → handle(ctx) → 写响应
-│  ├─ routes/             # auth · domains · settings · projects · users · notifications
-│  ├─ auth/                # guard(路由分级)· session · password(scrypt)
+│  ├─ server.ts          # Bun.serve 入口:cookie/body 解析 → handle(ctx) → 写响应
+│  ├─ routes/             # auth · domains · settings · projects · courses · mentors · users · notifications(TS)
+│  ├─ auth/                # guard(路由分级)· session · password(scrypt)(TS)
 │  ├─ db/
-│  │  ├─ migrations/     # 001_init.sql · 002_project_interactions.sql
-│  │  ├─ migrate.js      # 迁移执行器(幂等)
-│  │  └─ pool.js         # pg 连接池 + 事务助手
-│  ├─ bin/create-admin.js # 建站长账号(交互式 / 环境变量非交互式)
-│  ├─ lib/slug.js         # 项目 slug 生成(避开保留动词)
-│  ├─ frontend/           # Vue3 + Vite 源码(portal + admin)
-│  └─ public-dist/        # 前端构建产物(gitignored,由 npm run build 生成)
-├─ test/                  # node --test,116 个测试
-├─ Dockerfile             # 多阶段:装前端依赖构建 → 拷进最终镜像
+│  │  ├─ migrations/     # 001_init.sql … 005_mentors.sql
+│  │  ├─ migrate.ts      # 迁移执行器(幂等)
+│  │  ├─ pool.ts         # pg 连接池 + 自管事务 tx() + drizzle 实例
+│  │  └─ schema.ts       # Drizzle schema(迁移的类型化镜像)
+│  ├─ bin/create-admin.ts # 建站长账号(交互式 / 环境变量非交互式)
+│  ├─ lib/                # slug(保留词规避)· str · pagination · like · statuses
+│  ├─ frontend/           # Vue3 + TS + Vite 源码(portal + admin)
+│  └─ public-dist/        # 前端构建产物(gitignored,由 bun run build 生成)
+├─ test/                  # bun test,178 个测试
+├─ bunfig.toml            # bun test 的 preload(测试库覆写用)
+├─ Dockerfile             # 多阶段 oven/bun:装前端依赖构建 → 拷进最终镜像
 ├─ docker-compose.yml     # app + db 两个服务
 └─ docs/                  # 架构 / 模块 / API / 数据模型 / 部署
 ```
